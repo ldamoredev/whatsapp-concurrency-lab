@@ -20,7 +20,8 @@
     "test:integration": "vitest run --project integration",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "test:unit": "vitest run --project unit"
+    "test:unit": "vitest run --project unit",
+    "demo": "tsx scripts/demo-envio-idempotente.ts"
   },
   "dependencies": {
     "@nestjs/common": "^11.1.6",
