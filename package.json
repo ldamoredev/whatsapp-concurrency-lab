@@ -17,9 +17,10 @@
     "migrate": "tsx scripts/migrate.ts",
     "migrate:status": "tsx scripts/migrate.ts --status",
     "test": "vitest run",
-    "test:integration": "vitest run test/integration",
+    "test:integration": "vitest run --project integration",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:unit": "vitest run --project unit"
   },
   "dependencies": {
     "@nestjs/common": "^11.1.6",

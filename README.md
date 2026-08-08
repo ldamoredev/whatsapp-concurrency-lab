@@ -7,18 +7,67 @@ vocabulario con el que se hacen visibles esas carreras.
 El alcance completo del proyecto está en [`docs/ALCANCE.md`](docs/ALCANCE.md). Ese archivo
 manda y no se edita desde acá.
 
-## Estado: slice 1 de 4 — modelo de dominio y schema
+## Estado: slice 2 de 4 — envío idempotente
 
 Lo que existe hoy:
 
-- Scaffold Node LTS + TypeScript + NestJS con Fastify (sin rutas de negocio todavía).
-- PostgreSQL 16 en Docker Compose.
+- Node LTS + TypeScript + NestJS con Fastify, PostgreSQL 16 en Docker Compose.
 - Migraciones SQL versionadas con las 10 tablas del modelo mínimo y sus constraints.
-- 63 tests de integración contra PostgreSQL real que prueban cada constraint **rompiéndola**.
+- **`POST /v1/conversations/:id/messages` idempotente**: publica el mensaje, asigna el
+  orden visible con `FOR UPDATE` y crea el snapshot de entrega, todo en un solo commit.
+- Lease + fencing por `attempt` para operaciones abandonadas.
+- **104 tests**: unit del fingerprint, integración contra PostgreSQL real y e2e HTTP,
+  incluidos C1 (100 requests concurrentes) y C2 (respuesta perdida post-commit).
 
-Lo que **no** existe todavía, y es a propósito: endpoints HTTP, lógica de idempotencia,
-política de huecos, acks, Kubernetes, k6, Toxiproxy, Prometheus. Ver
+Lo que **no** existe todavía, a propósito: política de huecos y `resync_required` (S3),
+acks y cleanup (S4), Kubernetes, k6, Toxiproxy, Prometheus. Ver
 [`docs/PENDIENTE.md`](docs/PENDIENTE.md).
+
+## La API
+
+### `POST /v1/conversations/:conversationId/messages`
+
+Header obligatorio `Idempotency-Key`. Body:
+
+```json
+{
+  "senderId": "uuid",
+  "senderDeviceId": "uuid",
+  "clientMessageId": "local-1",
+  "clientSequence": 1,
+  "body": "hola"
+}
+```
+
+| Situación | Respuesta |
+|---|---|
+| primera ejecución | `201` + el mensaje creado |
+| misma key, mismo pedido, ya completado | `200` + **el mismo** `messageId` (I3) |
+| misma key, otro pedido | `409 IDEMPOTENCY_KEY_REUSED`, sin ejecutar nada (I2) |
+| misma key, mismo pedido, en curso | `409 IDEMPOTENCY_IN_PROGRESS` + `Retry-After` |
+| esa posición del stream está tomada por otro mensaje | `409 CLIENT_SEQUENCE_CONFLICT` (I4) |
+| conversación inexistente o dispositivo no miembro | `404 SENDER_NOT_IN_CONVERSATION` |
+
+La respuesta lleva `X-Idempotent-Replay: true|false` — sólo para el laboratorio, para poder
+ver por qué camino salió.
+
+### `GET /v1/messages/:messageId` y `GET /v1/operations/:key`
+
+Consulta para recovery y para verificar invariantes. `GET /v1/operations/:key` requiere el
+header `X-Actor-Id` y devuelve la respuesta persistida: **un cliente que perdió la respuesta
+puede recuperarla sin reenviar el efecto**.
+
+### El contrato en cuatro comandos
+
+Con la app corriendo (`npm start`) y una conversación creada:
+
+```bash
+curl -i -X POST localhost:3000/v1/conversations/$CONV/messages -H 'content-type: application/json' -H 'Idempotency-Key: K1' -d "$BODY"
+```
+
+Repetir el mismo comando devuelve `200` con el mismo `messageId`. Cambiar el `body` sin
+cambiar la key devuelve `409 IDEMPOTENCY_KEY_REUSED`. Y al final, la base tiene **un** mensaje,
+**un** batch y **un** envelope por dispositivo.
 
 ## Levantar
 
@@ -49,14 +98,28 @@ vez, y las migraciones se aplican en el setup global de la suite.
 npm run db:up && npm test
 ```
 
+Los unit tests no necesitan Docker:
+
+```bash
+npm run test:unit
+```
+
 Un archivo suelto, o un caso puntual:
 
 ```bash
 npx vitest run test/integration/messages.constraints.spec.ts -t "I5"
 ```
 
-Los tests corren contra PostgreSQL real, en serie y truncando entre casos. No hay base en
-memoria ni mocks: una constraint de Postgres sólo se puede probar contra Postgres.
+Los tests de integración y e2e corren contra PostgreSQL real, en serie y truncando entre
+casos. No hay base en memoria ni mocks: una constraint de Postgres sólo se puede probar
+contra Postgres.
+
+| Suite | Qué cubre |
+|---|---|
+| `test/unit/` | fingerprint canónico: estabilidad, colisiones, tipos |
+| `test/integration/*.constraints.spec.ts` | cada constraint del schema, probada por violación |
+| `test/integration/send-message.spec.ts` | contrato de idempotencia, lease, fencing, **C1**, **C2** |
+| `test/e2e/` | HTTP real: status, headers, códigos de error, C1 sobre el endpoint |
 
 ## Cómo están escritos los tests
 
@@ -166,14 +229,30 @@ lancen a la vez — y rechaza una migración ya aplicada que fue editada.
 explícitos. Subir el aislamiento global sin medir sería tapar el problema en vez de
 resolverlo. Cada decisión se documenta donde se toma.
 
+**Dos transacciones, no cuatro recovery points.** Tx1 reclama la idempotency key; Tx2 hace
+todo el efecto en un solo commit. Por qué eso elimina las ventanas ambiguas internas, cuál
+es la única ventana que queda y cómo la cubre el lease con fencing:
+[ADR 0001](docs/adr/0001-una-transaccion-para-el-efecto.md).
+
+**Inyección de dependencias explícita.** Los constructores usan `@Inject(TOKEN)` en vez de
+inyección por tipo. La inyección por tipo depende de `emitDecoratorMetadata`, que emite
+`tsc` pero **no** esbuild — el transpilador de Vitest. Sin token explícito la app funciona
+compilada y falla en los tests con un `undefined` difícil de leer.
+
 ## Estructura
 
 ```text
 docs/ALCANCE.md      alcance completo del proyecto (fuente de verdad, no editar)
 docs/PENDIENTE.md    scope creep anotado para slices posteriores
+docs/adr/            sólo decisiones que cambian una garantía
 migrations/          SQL versionado, con el race que previene cada constraint
-src/                 scaffold NestJS + acceso a datos
-test/integration/    constraints probadas por violación contra Postgres real
+src/domain/          fingerprint, errores y tipos del dominio
+src/application/     SendMessageService: el contrato de idempotencia
+src/infrastructure/  pool, migrator y repositorios SQL
+src/http/            controller, validación de entrada y mapeo de errores
+test/unit/           lógica pura, sin base
+test/integration/    constraints y contrato contra Postgres real
+test/e2e/            HTTP real contra una instancia
 infra/docker/        init de la base
 scripts/migrate.ts   CLI de migraciones
 ```
