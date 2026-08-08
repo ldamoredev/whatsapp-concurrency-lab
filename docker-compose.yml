@@ -1,0 +1,35 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: whatsapp-lab-postgres
+    environment:
+      POSTGRES_USER: lab
+      POSTGRES_PASSWORD: lab
+      POSTGRES_DB: whatsapp_lab
+      # El laboratorio necesita ver lock waits y deadlocks, no esconderlos.
+      POSTGRES_INITDB_ARGS: '--data-checksums'
+    command:
+      - postgres
+      - -c
+      - log_lock_waits=on
+      - -c
+      - deadlock_timeout=200ms
+      - -c
+      - log_min_duration_statement=500
+      - -c
+      - max_connections=200
+    ports:
+      # 5433 en el host a proposito: 5432 suele estar tomado por un Postgres local.
+      - '5433:5432'
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./infra/docker/initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U lab -d whatsapp_lab']
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+
+volumes:
+  postgres-data:

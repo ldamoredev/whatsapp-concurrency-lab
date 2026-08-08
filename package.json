@@ -1,0 +1,40 @@
+{
+  "name": "whatsapp-concurrency-lab",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Laboratorio backend de idempotencia, orden por conversacion y concurrencia multi-dispositivo",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/main.js",
+    "start:dev": "tsx watch src/main.ts",
+    "db:up": "docker compose up -d --wait postgres",
+    "db:down": "docker compose down",
+    "db:reset": "docker compose down -v && docker compose up -d --wait postgres",
+    "migrate": "tsx scripts/migrate.ts",
+    "migrate:status": "tsx scripts/migrate.ts --status",
+    "test": "vitest run",
+    "test:integration": "vitest run test/integration",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@nestjs/common": "^11.1.6",
+    "@nestjs/core": "^11.1.6",
+    "@nestjs/platform-fastify": "^11.1.6",
+    "dotenv": "^17.2.3",
+    "pg": "^8.16.3",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.3",
+    "@types/pg": "^8.15.5",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  }
+}
