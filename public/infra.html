@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Réplicas y base · whatsapp-concurrency-lab</title>
+    <link rel="stylesheet" href="/panel.css" />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>◧</text></svg>" />
+  </head>
+  <body data-depth="detallado">
+    <header class="top" id="top"></header>
+
+    <main class="page">
+      <div class="lede">
+        <h1>Réplicas y base</h1>
+        <p class="question">El estado completo, sin narración.</p>
+        <p>
+          Todo lo que muestran los escenarios sale de acá. Se refresca solo cada segundo y
+          medio, leyendo la base — no la memoria de ningún proceso.
+        </p>
+      </div>
+
+      <section class="section">
+        <h2>Réplicas</h2>
+        <div class="replicas" id="replicas"></div>
+        <p class="run__note" style="text-align:left;margin-top:10px">
+          Probá <code>docker stop whatsapp-lab-api-2</code> con esta página abierta: la
+          tarjeta se pone en rojo y los escenarios siguen andando con las otras dos.
+        </p>
+      </section>
+
+      <section class="section">
+        <h2>Carga sostenida</h2>
+        <div class="lede">
+          <p>
+            200 envíos mezclando únicos, reintentos equivalentes y conflictos deliberados,
+            repartidos entre las tres réplicas. Mirá el verificador de invariantes de arriba
+            mientras corre: no se mueve de cero.
+          </p>
+        </div>
+        <div class="run">
+          <button class="run__btn" id="run-load" type="button">correr carga sostenida</button>
+        </div>
+        <div class="breakdown" id="load-result" style="justify-content:center;margin-top:14px"></div>
+      </section>
+
+      <section class="section">
+        <div class="grid-2">
+          <div class="tbl-box">
+            <div class="tbl-box__head"><h3>Orden visible</h3><span class="tbl-box__hint" id="hint-counter">—</span></div>
+            <div class="tbl-scroll">
+              <table class="tbl" id="tbl-messages">
+                <thead><tr><th>client</th><th>server</th><th>estado</th><th>cuerpo</th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="tbl-box">
+            <div class="tbl-box__head"><h3>Streams por dispositivo</h3><span class="tbl-box__hint">próximo esperado</span></div>
+            <div class="tbl-scroll">
+              <table class="tbl" id="tbl-streams">
+                <thead><tr><th>dispositivo</th><th>espera</th><th>estado</th><th>plazo</th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="tbl-box">
+            <div class="tbl-box__head"><h3>Entrega</h3><span class="tbl-box__hint">snapshot · trabajo · limpieza</span></div>
+            <div class="tbl-scroll">
+              <table class="tbl" id="tbl-batches">
+                <thead><tr><th>mensaje</th><th>progreso</th><th>envelopes</th><th>limpieza</th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="tbl-box">
+            <div class="tbl-box__head"><h3>Operaciones idempotentes</h3><span class="tbl-box__hint">últimas 20</span></div>
+            <div class="tbl-scroll">
+              <table class="tbl" id="tbl-ops">
+                <thead><tr><th>key</th><th>estado</th><th>intento</th><th>respuesta</th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="tbl-box">
+          <div class="tbl-box__head"><h3>Requests</h3><span class="tbl-box__hint">qué réplica atendió cada uno</span></div>
+          <div class="log" id="log"></div>
+        </div>
+      </section>
+
+      <p class="footnote">
+        El verificador de arriba corre cuatro consultas contra la base — I4, I5, I8 e I9 — y
+        tiene que decir siempre <em>sin violaciones</em>. Contar respuestas <code>2xx</code>
+        no demostraría ninguna de esas propiedades.
+      </p>
+    </main>
+
+    <script type="module" src="/infra.js"></script>
+  </body>
+</html>

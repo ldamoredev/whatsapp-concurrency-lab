@@ -4,11 +4,13 @@ import { AckService } from './application/ack.service';
 import { CleanupDeliveriesService } from './application/cleanup-deliveries.service';
 import { ExpireGapsService } from './application/expire-gaps.service';
 import { LabService } from './application/lab.service';
+import { NaiveService } from './application/naive.service';
 import { SendMessageService } from './application/send-message.service';
 import { DatabaseModule, PG_POOL } from './infrastructure/database/database.module';
 import { AcksController } from './http/acks.controller';
 import { HealthController } from './http/health.controller';
 import { LabController } from './http/lab.controller';
+import { NaiveController } from './http/naive.controller';
 import { PanelController } from './http/panel.controller';
 import { MetricsController } from './http/metrics.controller';
 import { MessagesController } from './http/messages.controller';
@@ -44,7 +46,7 @@ export const LAB_PANEL_ENABLED = process.env.LAB_PANEL_ENABLED !== 'false';
     AcksController,
     HealthController,
     MetricsController,
-    ...(LAB_PANEL_ENABLED ? [LabController, PanelController] : []),
+    ...(LAB_PANEL_ENABLED ? [LabController, NaiveController, PanelController] : []),
   ],
   providers: [
     {
@@ -74,6 +76,7 @@ export const LAB_PANEL_ENABLED = process.env.LAB_PANEL_ENABLED !== 'false';
     ExpireGapsService,
     CleanupDeliveriesService,
     LabService,
+    NaiveService,
   ],
 })
 export class AppModule {}

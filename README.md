@@ -42,37 +42,44 @@ npm run stack:up
 
 Y abrir **http://localhost:3001**.
 
-Seis botones, cada uno provoca una carrera real repartida entre las tres réplicas — no una
-simulación: el navegador manda los requests y el reparto se ve en vivo.
+Cada escenario **corre dos veces**, con la misma entrada y contra la misma base: primero por
+el camino ingenuo —el que uno escribe cuando todavía no pensó en concurrencia— y después por
+el camino real. Los requests salen del navegador hacia las tres réplicas; si los orquestara
+el servidor, todo pasaría por un proceso y no habría carrera que mostrar.
 
-| Escenario | Qué provoca | Qué demuestra |
-|---|---|---|
-| **C1** Carrera de idempotencia | 100 requests concurrentes, misma key | 1 creado · N replays · el resto en curso |
-| **I2** Key reusada | misma key, cuerpos distintos | conflicto sin ningún efecto extra |
-| **C3** Orden y huecos | 1, 3, 4 y después el 2 | los adelantados esperan sin orden visible |
-| **C3** Hueco que vence | deja un hueco y corre el barrido | `resync_required`, nada publicado en silencio |
-| **C4** Acks multi-dispositivo | acks duplicados + CronJob en paralelo | un solo cleanup |
-| **I11** Carga sostenida | 200 envíos mezclados | cero invariantes rotas |
+| Página | La pregunta | Sin protección | Con protección |
+|---|---|---|---|
+| **/idempotencia** | el cliente reintenta, ¿cómo sabe el servidor que es el mismo pedido? | 2 a 15 mensajes | exactamente 1 |
+| **/orden** | los mensajes llegan desordenados, ¿se publican como llegan? | `1 · 3 · 4 · 2` | `1 · 2 · 3 · 4` |
+| **/entrega** | tres dispositivos confirman con reintentos, ¿cómo se cuenta? | progreso 21 de 3 | 3 de 3 |
+| **/infra** | el estado completo, sin narración | — | — |
 
-Arriba a la derecha, el contador de invariantes corre **contra la base** (I4, I5, I8, I9) y
-tiene que decir siempre *sin violaciones*. Contar respuestas 2xx no demostraría nada.
-
-Corrida real de C1 sobre las tres réplicas:
+Corridas reales, verificadas en navegador:
 
 ```text
-201 creado 1   ·   200 replay 91   ·   409 en curso 8   ·   ganó api-1
-api-1 ████ 34    api-2 ████ 33    api-3 ████ 33
+idempotencia   sin protección  6      con protección  1
+orden          sin protección  1·3·4·2    con protección  1·2·3·4
+entrega        sin protección  21/3   con protección  3/3
 ```
 
-Y de C4:
+El número del lado ingenuo **cambia en cada corrida**: a veces 2, a veces 15, a veces
+ninguno. Eso es lo que hace peligrosa a una condición de carrera — no falla siempre, falla
+*a veces*, y en desarrollo casi nunca. El panel lo dice explícitamente.
 
-```text
-15 acks + 4 corridas del CronJob, todo concurrente
-avanzaron 3   ·   sin efecto 12   ·   cleanups 1
-```
+Arriba a la derecha, la verificación de invariantes corre **contra la base** (I4, I5, I8, I9)
+y tiene que decir siempre *sin violaciones*. Contar respuestas 2xx no demostraría nada.
 
-> El panel y `POST /lab/reset` **truncan la base**: existen para provocar carreras y volver
-> a empezar. Se apagan con `LAB_PANEL_ENABLED=false`.
+El dial **breve / detallado** cambia la densidad de la prosa sin mover el esqueleto: el panel
+sirve para aprenderlo solo y para mostrárselo a alguien, y una sola densidad falla en una de
+las dos.
+
+> El camino sin protección corre contra **tablas espejo sin constraints**
+> (`migrations/0006`), nunca contra las reales: así la demostración no deja el sistema
+> desprotegido mientras corre. `POST /lab/reset` trunca la base — es la funcionalidad, no un
+> riesgo. Todo se apaga con `LAB_PANEL_ENABLED=false`.
+
+El diseño del panel está registrado en [`DESIGN.md`](DESIGN.md) y el contexto de producto en
+[`PRODUCT.md`](PRODUCT.md).
 
 ## Tres réplicas en un comando
 

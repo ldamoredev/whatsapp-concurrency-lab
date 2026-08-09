@@ -71,6 +71,10 @@ services:
       GAP_TIMEOUT_MS: '10000'
       INSTANCE_ID: api-1
     ports: ['3001:3000']
+    # El panel se lee de disco en cada request: montarlo permite editarlo y recargar el
+    # navegador sin reconstruir la imagen. En un despliegue real esto no existe.
+    volumes: &panel-mount
+      - ./public:/app/public:ro
     depends_on:
       postgres: { condition: service_healthy }
       migrate: { condition: service_completed_successfully }
@@ -94,6 +98,7 @@ services:
       <<: *api-env
       INSTANCE_ID: api-2
     ports: ['3002:3000']
+    volumes: *panel-mount
     depends_on:
       postgres: { condition: service_healthy }
       migrate: { condition: service_completed_successfully }
@@ -110,6 +115,7 @@ services:
       <<: *api-env
       INSTANCE_ID: api-3
     ports: ['3003:3000']
+    volumes: *panel-mount
     depends_on:
       postgres: { condition: service_healthy }
       migrate: { condition: service_completed_successfully }

@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Idempotencia · whatsapp-concurrency-lab</title>
+    <link rel="stylesheet" href="/panel.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>◧</text></svg>"
+    />
+  </head>
+  <body data-depth="detallado">
+    <header class="top" id="top"></header>
+
+    <main class="page">
+      <div class="lede">
+        <h1>Idempotencia</h1>
+        <p class="question">
+          El cliente pierde la respuesta y reintenta. ¿Cómo sabe el servidor que es el mismo
+          pedido y no uno nuevo?
+        </p>
+        <p>
+          Cuando un request falla por timeout, el cliente no puede distinguir tres
+          situaciones: que no llegó, que llegó y se ejecutó pero se perdió la respuesta, o
+          que llegó y no se ejecutó. En dos de las tres <strong>hay que reintentar</strong>.
+          En la del medio, reintentar duplica.
+        </p>
+        <p class="deep">
+          La solución es que el cliente mande una etiqueta con su intento —la
+          <strong>idempotency key</strong>— y la repita en cada reintento. El servidor la usa
+          para reconocer "esto ya lo hice". Es el número de comanda que te dan en un
+          mostrador: si volvés a preguntar por el pedido 47, no te preparan otro.
+        </p>
+        <p class="deep">
+          Lo interesante es <em>dónde</em> vive esa garantía. La versión intuitiva —consultar
+          si la key existe y, si no, crear— tiene un agujero que sólo aparece con
+          concurrencia real.
+        </p>
+      </div>
+
+      <section class="section">
+        <h2>La entrada, idéntica para los dos caminos</h2>
+        <div class="input-strip">
+          <div>
+            <div class="input-strip__label">requests concurrentes</div>
+            <div class="input-strip__value"><em>60</em></div>
+          </div>
+          <div>
+            <div class="input-strip__label">idempotency key</div>
+            <div class="input-strip__value">la <em>misma</em> para los 60</div>
+          </div>
+          <div>
+            <div class="input-strip__label">repartidos entre</div>
+            <div class="input-strip__value"><em>3</em> réplicas</div>
+          </div>
+          <div>
+            <div class="input-strip__label">cuerpo</div>
+            <div class="input-strip__value">idéntico</div>
+          </div>
+        </div>
+
+        <div class="run">
+          <button class="run__btn" id="run" type="button">correr los dos caminos</button>
+        </div>
+        <p class="run__note">
+          Los 60 requests salen de tu navegador, no del servidor. Si los orquestara el
+          servidor, todo pasaría por un proceso y no habría carrera que mostrar.
+        </p>
+      </section>
+
+      <section class="section">
+        <h2>Resultado</h2>
+        <div class="versus">
+          <div class="side" data-kind="naive" id="side-naive">
+            <div class="side__head">
+              <span class="side__title">Sin protección</span>
+              <span class="side__sub">consultar, y después crear</span>
+            </div>
+            <div class="verdict"><div class="verdict__idle">todavía sin correr</div></div>
+            <div class="breakdown"></div>
+            <div class="reading"></div>
+          </div>
+
+          <div class="versus__rule" role="separator"></div>
+
+          <div class="side" data-kind="guarded" id="side-guarded">
+            <div class="side__head">
+              <span class="side__title">Con protección</span>
+              <span class="side__sub">dejar que decida la base</span>
+            </div>
+            <div class="verdict"><div class="verdict__idle">todavía sin correr</div></div>
+            <div class="breakdown"></div>
+            <div class="reading"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>Dónde está la diferencia</h2>
+        <div class="code-pair">
+          <div>
+            <h3 style="color: var(--bad)">Sin protección</h3>
+            <pre class="code"><i>-- 1. ¿ya existe esta key?</i>
+<b>SELECT</b> resource_id <b>FROM</b> operations
+ <b>WHERE</b> key = $1;
+
+<u>-- ◄── LA VENTANA</u>
+<u>-- Los otros 59 requests llegan acá</u>
+<u>-- y todos leyeron "no existe".</u>
+
+<i>-- 2. no existe, entonces lo creo</i>
+<b>INSERT INTO</b> messages ...;
+<b>INSERT INTO</b> operations ...;</pre>
+          </div>
+          <div>
+            <h3 style="color: var(--ok)">Con protección</h3>
+            <pre class="code"><i>-- No hay consulta previa.</i>
+<i>-- El INSERT es la decisión.</i>
+
+<b>INSERT INTO</b> idempotency_operations
+  (actor_id, route, key, ...)
+<b>VALUES</b> ($1, $2, $3, ...);
+
+<s>-- constraint en el schema:</s>
+<s>UNIQUE (actor_id, route, key)</s>
+
+<i>-- ¿falló con 23505?</i>
+<i>-- entonces otro ganó: leer su resultado</i></pre>
+          </div>
+        </div>
+
+        <div class="lede" style="margin-top: 18px">
+          <p>
+            El chequeo previo <em>se siente</em> como una protección y no lo es. En
+            <code>READ COMMITTED</code>, ninguna transacción ve las filas no confirmadas de
+            otra: los 60 leen "no existe" y los 60 crean el mensaje.
+          </p>
+          <p class="deep">
+            La versión protegida no consulta antes. Manda el <code>INSERT</code> directo y
+            deja que la constraint decida quién gana. Los perdedores reciben el error
+            <code>23505</code>, que <strong>no es un fallo</strong>: es la señal de que otro
+            llegó primero y hay que leer su resultado.
+          </p>
+          <p class="deep">
+            Ese cambio de lectura es el corazón de todo: un error de unicidad deja de ser una
+            excepción y pasa a ser control de flujo.
+          </p>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>La misma key con cuerpos distintos</h2>
+        <div class="lede">
+          <p>
+            Un caso aparte: el cliente reusa la key pero manda otro contenido. Eso ya no es
+            un reintento, es un error suyo — y ejecutarlo sería peor que rechazarlo.
+          </p>
+        </div>
+        <div class="run">
+          <button class="run__btn" id="run-conflict" type="button">
+            correr 30 con la misma key y cuerpos distintos
+          </button>
+        </div>
+        <div class="versus" style="margin-top: 20px">
+          <div class="side" data-kind="naive" id="side-naive-2">
+            <div class="side__head">
+              <span class="side__title">Sin fingerprint</span>
+              <span class="side__sub">la key alcanza</span>
+            </div>
+            <div class="verdict"><div class="verdict__idle">todavía sin correr</div></div>
+            <div class="breakdown"></div>
+            <div class="reading"></div>
+          </div>
+          <div class="versus__rule" role="separator"></div>
+          <div class="side" data-kind="guarded" id="side-guarded-2">
+            <div class="side__head">
+              <span class="side__title">Con fingerprint</span>
+              <span class="side__sub">hash del pedido</span>
+            </div>
+            <div class="verdict"><div class="verdict__idle">todavía sin correr</div></div>
+            <div class="breakdown"></div>
+            <div class="reading"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="grid-2">
+          <div class="tbl-box">
+            <div class="tbl-box__head">
+              <h3>Operaciones idempotentes</h3>
+              <span class="tbl-box__hint">camino protegido</span>
+            </div>
+            <div class="tbl-scroll">
+              <table class="tbl" id="tbl-ops">
+                <thead>
+                  <tr>
+                    <th>key</th>
+                    <th>estado</th>
+                    <th>intento</th>
+                    <th>respuesta</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="tbl-box">
+            <div class="tbl-box__head">
+              <h3>Requests</h3>
+              <span class="tbl-box__hint">qué réplica atendió cada uno</span>
+            </div>
+            <div class="log" id="log"></div>
+          </div>
+        </div>
+      </section>
+
+      <p class="footnote">
+        El camino sin protección corre contra tablas espejo sin constraints
+        (<code>migrations/0006</code>), no contra las reales. Un espejo separado hace la misma
+        demostración sin dejar el sistema desprotegido durante la demo.
+      </p>
+    </main>
+
+    <script type="module" src="/idempotencia.js"></script>
+  </body>
+</html>

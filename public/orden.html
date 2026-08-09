@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Orden y huecos · whatsapp-concurrency-lab</title>
+    <link rel="stylesheet" href="/panel.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>◧</text></svg>"
+    />
+  </head>
+  <body data-depth="detallado">
+    <header class="top" id="top"></header>
+
+    <main class="page">
+      <div class="lede">
+        <h1>Orden y huecos</h1>
+        <p class="question">
+          Los mensajes llegan desordenados. ¿Se publican como llegan, o se espera al que
+          falta?
+        </p>
+        <p>
+          Un dispositivo numera lo que manda: 1, 2, 3. La red no garantiza ese orden. Llega
+          el 1, después el 3. <strong>¿Qué se hace con el 3?</strong>
+        </p>
+        <p class="deep">
+          Publicarlo ya deja al destinatario con una conversación que tiene un salto —y sin
+          ninguna forma de saber que falta algo. El daño es silencioso: no hay error, no hay
+          señal, sólo una conversación sutilmente incorrecta.
+        </p>
+        <p class="deep">
+          Acá hay dos numeraciones distintas y conviene no confundirlas.
+          <code>client_sequence</code> ordena lo que manda <em>un dispositivo</em>;
+          <code>server_sequence</code> ordena lo que ve <em>la conversación</em>. Ninguna se
+          deriva de un reloj: con tres réplicas hay tres relojes.
+        </p>
+      </div>
+
+      <section class="section">
+        <h2>La entrada, idéntica para los dos caminos</h2>
+        <div class="input-strip">
+          <div>
+            <div class="input-strip__label">el dispositivo manda</div>
+            <div class="input-strip__value">1 · 3 · 4 · <em>2</em></div>
+          </div>
+          <div>
+            <div class="input-strip__label">el 2 llega</div>
+            <div class="input-strip__value">último, tarde</div>
+          </div>
+          <div>
+            <div class="input-strip__label">orden correcto</div>
+            <div class="input-strip__value"><em>1 · 2 · 3 · 4</em></div>
+          </div>
+        </div>
+
+        <div class="run">
+          <button class="run__btn" id="run" type="button">correr los dos caminos</button>
+        </div>
+        <p class="run__note">
+          Mismo dispositivo, misma conversación, mismo orden de llegada en los dos casos.
+        </p>
+      </section>
+
+      <section class="section">
+        <h2>Cómo quedó la conversación</h2>
+        <div class="versus">
+          <div class="side" data-kind="naive" id="side-naive">
+            <div class="side__head">
+              <span class="side__title">Sin protección</span>
+              <span class="side__sub">publicar apenas llega</span>
+            </div>
+            <div class="verdict"><div class="verdict__idle">todavía sin correr</div></div>
+            <div class="breakdown"></div>
+            <div class="tbl-box">
+              <div class="tbl-scroll">
+                <table class="tbl" id="tbl-naive">
+                  <thead>
+                    <tr>
+                      <th>orden visible</th>
+                      <th>mensaje</th>
+                    </tr>
+                  </thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+            </div>
+            <div class="reading"></div>
+          </div>
+
+          <div class="versus__rule" role="separator"></div>
+
+          <div class="side" data-kind="guarded" id="side-guarded">
+            <div class="side__head">
+              <span class="side__title">Con protección</span>
+              <span class="side__sub">esperar y drenar</span>
+            </div>
+            <div class="verdict"><div class="verdict__idle">todavía sin correr</div></div>
+            <div class="breakdown"></div>
+            <div class="tbl-box">
+              <div class="tbl-scroll">
+                <table class="tbl" id="tbl-guarded">
+                  <thead>
+                    <tr>
+                      <th>orden visible</th>
+                      <th>mensaje</th>
+                    </tr>
+                  </thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+            </div>
+            <div class="reading"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>Dónde está la diferencia</h2>
+        <div class="code-pair">
+          <div>
+            <h3 style="color: var(--bad)">Sin protección</h3>
+            <pre class="code"><i>-- llega un mensaje: se publica</i>
+<b>INSERT INTO</b> messages
+  (client_sequence, server_sequence, ...)
+<b>VALUES</b> ($1, <u>siguiente_libre()</u>, ...);
+
+<u>-- nadie preguntó si falta el anterior</u></pre>
+          </div>
+          <div>
+            <h3 style="color: var(--ok)">Con protección</h3>
+            <pre class="code"><b>SELECT</b> next_client_sequence <b>FROM</b> device_sequences
+ <b>WHERE</b> ... <s>FOR UPDATE</s>;
+
+<i>-- ¿es el que esperábamos?</i>
+<i>--   ==  publica, y arrastra lo que esperaba</i>
+<i>--   &gt;   queda buffered, SIN server_sequence</i>
+<i>--   &lt;   ya lo teníamos: replay</i>
+
+<s>CHECK ((status='published') =</s>
+<s>       (server_sequence IS NOT NULL))</s></pre>
+          </div>
+        </div>
+
+        <div class="lede" style="margin-top: 18px">
+          <p>
+            El mensaje adelantado <strong>sí se guarda</strong>, pero sin lugar en la
+            conversación y sin generar trabajo de entrega. Existe en la base y para los
+            destinatarios todavía no pasó nada.
+          </p>
+          <p class="deep">
+            Cuando llega el que faltaba, los tres se publican en un solo
+            <code>COMMIT</code>, en el orden del stream y no en el de llegada. El
+            <code>CHECK</code> del schema hace que un mensaje visible sin orden sea
+            <em>imposible de representar</em>, no sólo improbable.
+          </p>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>¿Y si el que falta nunca llega?</h2>
+        <div class="lede">
+          <p>
+            Esperar para siempre tampoco es una solución. Hay un plazo — y cuando vence, el
+            servidor <strong>no publica igual</strong>: bloquea el stream y le pasa la
+            decisión al cliente, que es quien sabe si ese mensaje sigue en su cola o se
+            perdió para siempre.
+          </p>
+        </div>
+        <div class="run">
+          <button class="run__btn" id="run-gap" type="button">
+            dejar un hueco y vencer el plazo
+          </button>
+        </div>
+        <div class="versus" style="margin-top: 20px">
+          <div class="side" data-kind="naive" id="side-naive-2">
+            <div class="side__head">
+              <span class="side__title">Saltear el hueco</span>
+              <span class="side__sub">"ya esperé bastante"</span>
+            </div>
+            <div class="verdict"><div class="verdict__idle">todavía sin correr</div></div>
+            <div class="breakdown"></div>
+            <div class="reading"></div>
+          </div>
+          <div class="versus__rule" role="separator"></div>
+          <div class="side" data-kind="guarded" id="side-guarded-2">
+            <div class="side__head">
+              <span class="side__title">Bloquear el stream</span>
+              <span class="side__sub">que decida el cliente</span>
+            </div>
+            <div class="verdict"><div class="verdict__idle">todavía sin correr</div></div>
+            <div class="breakdown"></div>
+            <div class="reading"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="grid-2">
+          <div class="tbl-box">
+            <div class="tbl-box__head">
+              <h3>Stream del dispositivo</h3>
+              <span class="tbl-box__hint">qué número espera</span>
+            </div>
+            <div class="tbl-scroll">
+              <table class="tbl" id="tbl-streams">
+                <thead>
+                  <tr>
+                    <th>dispositivo</th>
+                    <th>espera</th>
+                    <th>estado</th>
+                    <th>plazo</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="tbl-box">
+            <div class="tbl-box__head">
+              <h3>Requests</h3>
+              <span class="tbl-box__hint">qué réplica atendió cada uno</span>
+            </div>
+            <div class="log" id="log"></div>
+          </div>
+        </div>
+      </section>
+
+      <p class="footnote">
+        Esta elección preserva el orden y sacrifica disponibilidad de escritura de
+        <em>ese</em> dispositivo en <em>esa</em> conversación. Es deliberada y está
+        documentada en <code>docs/adr/0002</code>. En un sistema de telemetría, donde perder
+        orden se tolera y perder disponibilidad no, la decisión correcta sería la opuesta.
+      </p>
+    </main>
+
+    <script type="module" src="/orden.js"></script>
+  </body>
+</html>

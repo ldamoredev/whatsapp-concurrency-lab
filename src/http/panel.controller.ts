@@ -7,33 +7,52 @@ import { resolvePublicDir } from './public-path';
 /**
  * Sirve el panel.
  *
- * Tres rutas FIJAS en vez de un servidor de estaticos generico: con rutas fijas no hay
- * forma de pedir `../../etc/passwd`, no hace falta sanitizar nada y no se agrega una
- * dependencia para tres archivos.
+ * Un mapa FIJO de ruta -> archivo, en vez de un servidor de estaticos generico. Con
+ * rutas fijas no existe un path variable que sanitizar, asi que no hay forma de pedir
+ * `../../etc/passwd`; y no se agrega una dependencia para un puñado de archivos.
  *
  * Los archivos se leen en cada request a proposito: permite editar el panel y recargar
  * sin reconstruir la imagen, que es el flujo de trabajo del laboratorio.
  */
+const PAGES: Record<string, string> = {
+  '/': 'index.html',
+  '/idempotencia': 'idempotencia.html',
+  '/orden': 'orden.html',
+  '/entrega': 'entrega.html',
+  '/infra': 'infra.html',
+};
+
+const ASSETS: Record<string, { file: string; type: string }> = {
+  '/panel.css': { file: 'panel.css', type: 'text/css; charset=utf-8' },
+  '/lib.js': { file: 'lib.js', type: 'text/javascript; charset=utf-8' },
+  '/idempotencia.js': { file: 'idempotencia.js', type: 'text/javascript; charset=utf-8' },
+  '/orden.js': { file: 'orden.js', type: 'text/javascript; charset=utf-8' },
+  '/entrega.js': { file: 'entrega.js', type: 'text/javascript; charset=utf-8' },
+  '/infra.js': { file: 'infra.js', type: 'text/javascript; charset=utf-8' },
+};
+
 @Controller()
 export class PanelController {
   private readonly publicDir = resolvePublicDir();
 
-  @Get('/')
-  index(@Res({ passthrough: true }) reply: FastifyReply): string {
+  @Get(['/', '/idempotencia', '/orden', '/entrega', '/infra'])
+  page(@Res({ passthrough: true }) reply: FastifyReply): string {
     void reply.header('Content-Type', 'text/html; charset=utf-8');
-    return this.read('index.html');
+    return this.read(PAGES[reply.request.url.split('?')[0]] ?? 'index.html');
   }
 
-  @Get('/panel.css')
-  styles(@Res({ passthrough: true }) reply: FastifyReply): string {
-    void reply.header('Content-Type', 'text/css; charset=utf-8');
-    return this.read('panel.css');
-  }
-
-  @Get('/panel.js')
-  script(@Res({ passthrough: true }) reply: FastifyReply): string {
-    void reply.header('Content-Type', 'text/javascript; charset=utf-8');
-    return this.read('panel.js');
+  @Get([
+    '/panel.css',
+    '/lib.js',
+    '/idempotencia.js',
+    '/orden.js',
+    '/entrega.js',
+    '/infra.js',
+  ])
+  asset(@Res({ passthrough: true }) reply: FastifyReply): string {
+    const asset = ASSETS[reply.request.url.split('?')[0]];
+    void reply.header('Content-Type', asset.type);
+    return this.read(asset.file);
   }
 
   private read(file: string): string {

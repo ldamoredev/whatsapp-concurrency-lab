@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Entrega multi-dispositivo · whatsapp-concurrency-lab</title>
+    <link rel="stylesheet" href="/panel.css" />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>◧</text></svg>" />
+  </head>
+  <body data-depth="detallado">
+    <header class="top" id="top"></header>
+
+    <main class="page">
+      <div class="lede">
+        <h1>Entrega multi-dispositivo</h1>
+        <p class="question">
+          Tres dispositivos confirman a la vez, con reintentos. ¿Cómo se cuenta el progreso
+          sin contar de más?
+        </p>
+        <p>
+          Un mensaje va a tres dispositivos. Cada uno confirma cuando lo recibe — y como la
+          red falla, cada uno confirma <strong>varias veces</strong>. Algunos llegan fuera
+          de orden: un "lo recibí" que aparece después de un "lo leí".
+        </p>
+        <p class="deep">
+          El sistema tiene que saber cuándo terminó de entregar, para liberar el trabajo
+          pendiente. Si cuenta mal, pasa una de dos cosas: libera antes de tiempo y alguien
+          nunca recibe el mensaje, o no libera nunca y el trabajo se acumula para siempre.
+        </p>
+        <p class="deep">
+          El error de fondo es sutil: contar <strong>eventos</strong> en vez de contar
+          <strong>cambios de estado</strong>. Veinte confirmaciones del mismo dispositivo son
+          veinte eventos y un solo cambio.
+        </p>
+      </div>
+
+      <section class="section">
+        <h2>La entrada, idéntica para los dos caminos</h2>
+        <div class="input-strip">
+          <div>
+            <div class="input-strip__label">dispositivos</div>
+            <div class="input-strip__value"><em>3</em></div>
+          </div>
+          <div>
+            <div class="input-strip__label">confirmaciones</div>
+            <div class="input-strip__value"><em>21</em> concurrentes</div>
+          </div>
+          <div>
+            <div class="input-strip__label">incluyen</div>
+            <div class="input-strip__value">duplicadas y fuera de orden</div>
+          </div>
+          <div>
+            <div class="input-strip__label">progreso correcto</div>
+            <div class="input-strip__value"><em>3 de 3</em></div>
+          </div>
+        </div>
+
+        <div class="run">
+          <button class="run__btn" id="run" type="button">correr los dos caminos</button>
+        </div>
+        <p class="run__note">
+          En el camino protegido, el barrido de limpieza corre <em>en paralelo</em> con las
+          confirmaciones, a propósito: es la carrera que hay que forzar.
+        </p>
+      </section>
+
+      <section class="section">
+        <h2>Progreso de entrega</h2>
+        <div class="versus">
+          <div class="side" data-kind="naive" id="side-naive">
+            <div class="side__head">
+              <span class="side__title">Sin protección</span>
+              <span class="side__sub">sumar uno por confirmación</span>
+            </div>
+            <div class="verdict"><div class="verdict__idle">todavía sin correr</div></div>
+            <div class="breakdown"></div>
+            <div class="reading"></div>
+          </div>
+
+          <div class="versus__rule" role="separator"></div>
+
+          <div class="side" data-kind="guarded" id="side-guarded">
+            <div class="side__head">
+              <span class="side__title">Con protección</span>
+              <span class="side__sub">sumar por cambio de estado</span>
+            </div>
+            <div class="verdict"><div class="verdict__idle">todavía sin correr</div></div>
+            <div class="breakdown"></div>
+            <div class="reading"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>Dónde está la diferencia</h2>
+        <div class="code-pair">
+          <div>
+            <h3 style="color: var(--bad)">Sin protección</h3>
+            <pre class="code"><i>-- llega una confirmación</i>
+<b>INSERT INTO</b> receipts (device_id, state)
+<b>VALUES</b> ($1, $2);   <u>-- una fila por evento</u>
+
+<b>UPDATE</b> batches
+   <b>SET</b> delivered_count = <u>delivered_count + 1</u>
+ <b>WHERE</b> message_id = $1;
+
+<u>-- suma por ACK recibido</u></pre>
+          </div>
+          <div>
+            <h3 style="color: var(--ok)">Con protección</h3>
+            <pre class="code"><b>UPDATE</b> delivery_receipts
+   <b>SET</b> state = $3, version = version + 1
+ <b>WHERE</b> message_id = $1 <b>AND</b> device_id = $2
+   <s>AND array_position(estados, state)</s>
+   <s>  &lt; array_position(estados, $3)</s>;
+
+<i>-- ¿actualizó 0 filas? era duplicado.</i>
+<i>-- sólo si cruzó el umbral por PRIMERA vez:</i>
+<b>UPDATE</b> batches <b>SET</b> delivered_count + 1;
+
+<s>CHECK (delivered_count &lt;= expected_count)</s></pre>
+          </div>
+        </div>
+
+        <div class="lede" style="margin-top: 18px">
+          <p>
+            La comparación de estados vive <strong>en el <code>WHERE</code></strong>, no en
+            TypeScript. Un "lo recibí" que llega después de un "lo leí" actualiza
+            <strong>0 filas</strong> — y eso no es un error, es la respuesta correcta.
+          </p>
+          <p class="deep">
+            El progreso se suma únicamente cuando el recibo cruza el umbral por primera vez,
+            en la misma transacción que ese cambio. Veinte confirmaciones mueven el recibo
+            una vez, así que suman una vez.
+          </p>
+          <p class="deep">
+            Y el <code>CHECK</code> del schema es la red debajo: si algún día un bug sumara
+            de más, la base grita con un error en vez de dejar que el trabajo se libere antes
+            de tiempo.
+          </p>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>Qué queda después de limpiar</h2>
+        <div class="grid-2">
+          <div class="tbl-box">
+            <div class="tbl-box__head">
+              <h3>Recibos por dispositivo</h3>
+              <span class="tbl-box__hint">sobreviven a la limpieza</span>
+            </div>
+            <div class="tbl-scroll">
+              <table class="tbl" id="tbl-receipts">
+                <thead><tr><th>dispositivo</th><th>estado</th><th>versión</th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="tbl-box">
+            <div class="tbl-box__head">
+              <h3>Trabajo de entrega</h3>
+              <span class="tbl-box__hint">se borra al completarse</span>
+            </div>
+            <div class="tbl-scroll">
+              <table class="tbl" id="tbl-batches">
+                <thead><tr><th>mensaje</th><th>progreso</th><th>envelopes</th><th>limpieza</th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div class="lede" style="margin-top: 18px">
+          <p class="deep">
+            Son tablas distintas porque tienen vidas distintas. El trabajo pendiente
+            <strong>se borra</strong> cuando todos confirmaron; la evidencia
+            <strong>no se borra nunca</strong>. Si el estado de entrega viviera en el
+            trabajo, la limpieza habría borrado justo lo que hace falta para auditar que la
+            limpieza estuvo bien.
+          </p>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="tbl-box">
+          <div class="tbl-box__head">
+            <h3>Requests</h3>
+            <span class="tbl-box__hint">qué réplica atendió cada uno</span>
+          </div>
+          <div class="log" id="log"></div>
+        </div>
+      </section>
+
+      <p class="footnote">
+        La limpieza ocurre <em>una sola vez</em> aunque compitan la última confirmación y
+        varias corridas del barrido: todas pasan por la misma puerta
+        <code>WHERE cleanup_at IS NULL</code>, y sólo una la cruza. Sin líder, sin lock
+        global.
+      </p>
+    </main>
+
+    <script type="module" src="/entrega.js"></script>
+  </body>
+</html>

@@ -3,184 +3,146 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>whatsapp-concurrency-lab · panel</title>
+    <title>whatsapp-concurrency-lab</title>
     <link rel="stylesheet" href="/panel.css" />
     <link
       rel="icon"
       href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>◧</text></svg>"
     />
   </head>
-  <body>
-    <header class="topbar">
-      <div class="topbar__title">
-        <h1>whatsapp-concurrency-lab</h1>
-        <p>idempotencia · orden por conversación · concurrencia multi-dispositivo</p>
-      </div>
-      <div class="topbar__right">
-        <div class="invariants" id="invariants">
-          <span class="invariants__label">invariantes</span>
-          <span class="invariants__value" id="invariants-value">—</span>
-        </div>
-        <button class="btn btn--ghost" id="btn-reset">reiniciar laboratorio</button>
-      </div>
-    </header>
+  <body data-depth="detallado">
+    <header class="top" id="top"></header>
 
-    <main class="grid">
-      <!-- ── réplicas ────────────────────────────────────────────────────── -->
-      <section class="card card--wide">
-        <div class="card__head">
-          <h2>Réplicas</h2>
-          <span class="hint">tres procesos, memorias separadas, una sola base</span>
-        </div>
+    <main class="page">
+      <div class="lede">
+        <h1>Tres procesos, una sola verdad</h1>
+        <p class="question">
+          ¿Qué impide que dos réplicas creen el mismo mensaje dos veces?
+        </p>
+        <p>
+          Este laboratorio corre <strong>tres réplicas</strong> de una API de mensajería, con
+          memorias separadas y una sola base de datos. Cada escenario provoca una carrera de
+          verdad: los requests salen de tu navegador hacia las tres.
+        </p>
+        <p class="deep">
+          Lo que hace distinto a este panel es que cada escenario se ejecuta
+          <strong>dos veces</strong>. Primero por el camino ingenuo —el código que uno
+          escribe cuando todavía no pensó en concurrencia, que se lee razonable y pasa el
+          code review— y después por el camino real del sistema. Misma entrada, misma base,
+          resultados incomparables.
+        </p>
+        <p class="deep">
+          Una constraint no se entiende por lo que permite. Se entiende por el desastre que
+          impide.
+        </p>
+      </div>
+
+      <section class="section">
+        <h2>Réplicas</h2>
         <div class="replicas" id="replicas"></div>
+        <p class="run__note" style="text-align: left; margin-top: 10px">
+          Las tres sirven esta misma página. Si una se cae, el panel sigue: la API no guarda
+          nada en memoria.
+        </p>
       </section>
 
-      <!-- ── escenarios ──────────────────────────────────────────────────── -->
-      <section class="card card--wide">
-        <div class="card__head">
-          <h2>Escenarios</h2>
-          <span class="hint">cada botón provoca una carrera real contra las réplicas</span>
-        </div>
-        <div class="scenarios">
-          <button class="scenario" id="sc-c1" data-scenario="c1">
-            <span class="scenario__tag">C1</span>
-            <span class="scenario__name">Carrera de idempotencia</span>
-            <span class="scenario__desc">100 requests concurrentes con la misma key, repartidos entre las tres réplicas</span>
-            <span class="scenario__expect">esperado: 1 mensaje, 1 batch</span>
-          </button>
+      <section class="section">
+        <h2>Escenarios</h2>
+        <div class="index">
+          <a class="index__item" href="/idempotencia">
+            <span class="index__id">I1 · I2</span>
+            <span class="index__body">
+              <h3>Idempotencia</h3>
+              <p class="index__q">
+                El cliente pierde la respuesta y reintenta. ¿Cómo sabe el servidor que es el
+                mismo pedido y no uno nuevo?
+              </p>
+              <span class="index__contrast">
+                <span>sin protección → <b class="n">decenas de mensajes</b></span>
+                <span>con protección → <b class="g">exactamente uno</b></span>
+              </span>
+            </span>
+            <span class="index__go" aria-hidden="true">→</span>
+          </a>
 
-          <button class="scenario" id="sc-c1b" data-scenario="c1b">
-            <span class="scenario__tag">I2</span>
-            <span class="scenario__name">Key reusada</span>
-            <span class="scenario__desc">misma key con cuerpos distintos: el primero gana, el resto es conflicto</span>
-            <span class="scenario__expect">esperado: ningún efecto extra</span>
-          </button>
+          <a class="index__item" href="/orden">
+            <span class="index__id">I4 · I6</span>
+            <span class="index__body">
+              <h3>Orden y huecos</h3>
+              <p class="index__q">
+                Los mensajes llegan desordenados por la red. ¿Se publican como llegan, o se
+                espera al que falta?
+              </p>
+              <span class="index__contrast">
+                <span>sin protección → <b class="n">1, 3, 4, 2</b></span>
+                <span>con protección → <b class="g">1, 2, 3, 4</b></span>
+              </span>
+            </span>
+            <span class="index__go" aria-hidden="true">→</span>
+          </a>
 
-          <button class="scenario" id="sc-c3" data-scenario="c3">
-            <span class="scenario__tag">C3</span>
-            <span class="scenario__name">Orden y huecos</span>
-            <span class="scenario__desc">envía 1, 3, 4 y después el 2: los adelantados esperan sin orden visible</span>
-            <span class="scenario__expect">esperado: 1→2→3→4 al drenar</span>
-          </button>
+          <a class="index__item" href="/entrega">
+            <span class="index__id">I7 · I8</span>
+            <span class="index__body">
+              <h3>Entrega multi-dispositivo</h3>
+              <p class="index__q">
+                Tres dispositivos confirman a la vez, con reintentos. ¿Cómo se cuenta el
+                progreso sin contar de más?
+              </p>
+              <span class="index__contrast">
+                <span>sin protección → <b class="n">progreso 20 de 3</b></span>
+                <span>con protección → <b class="g">3 de 3</b></span>
+              </span>
+            </span>
+            <span class="index__go" aria-hidden="true">→</span>
+          </a>
 
-          <button class="scenario" id="sc-gap" data-scenario="gap">
-            <span class="scenario__tag">C3</span>
-            <span class="scenario__name">Hueco que vence</span>
-            <span class="scenario__desc">deja un hueco abierto y corre el barrido: el stream se bloquea</span>
-            <span class="scenario__expect">esperado: resync_required, nada publicado</span>
-          </button>
-
-          <button class="scenario" id="sc-c4" data-scenario="c4">
-            <span class="scenario__tag">C4</span>
-            <span class="scenario__name">Acks multi-dispositivo</span>
-            <span class="scenario__desc">acks duplicados, fuera de orden y concurrentes desde las tres réplicas</span>
-            <span class="scenario__expect">esperado: un solo cleanup</span>
-          </button>
-
-          <button class="scenario" id="sc-kill" data-scenario="kill">
-            <span class="scenario__tag">I11</span>
-            <span class="scenario__name">Carga sostenida</span>
-            <span class="scenario__desc">200 envíos mezclando únicos, retries y conflictos mientras mirás el reparto</span>
-            <span class="scenario__expect">esperado: cero invariantes rotas</span>
-          </button>
-        </div>
-        <div class="result" id="result" hidden></div>
-      </section>
-
-      <!-- ── conversación ────────────────────────────────────────────────── -->
-      <section class="card">
-        <div class="card__head">
-          <h2>Orden visible</h2>
-          <span class="hint" id="counter-hint">—</span>
-        </div>
-        <div class="table-wrap">
-          <table class="tbl" id="tbl-messages">
-            <thead>
-              <tr>
-                <th>client</th>
-                <th>server</th>
-                <th>estado</th>
-                <th>cuerpo</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
-        </div>
-      </section>
-
-      <!-- ── streams ─────────────────────────────────────────────────────── -->
-      <section class="card">
-        <div class="card__head">
-          <h2>Streams por dispositivo</h2>
-          <span class="hint">próximo client_sequence esperado</span>
-        </div>
-        <div class="table-wrap">
-          <table class="tbl" id="tbl-streams">
-            <thead>
-              <tr>
-                <th>dispositivo</th>
-                <th>próximo</th>
-                <th>estado</th>
-                <th>deadline</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
+          <a class="index__item" href="/infra">
+            <span class="index__id">estado</span>
+            <span class="index__body">
+              <h3>Réplicas y base</h3>
+              <p class="index__q">
+                El estado completo en vivo: mensajes, streams, entrega, operaciones
+                idempotentes y reparto de tráfico entre réplicas.
+              </p>
+              <span class="index__contrast">
+                <span>sin escenarios narrados, todo el detalle</span>
+              </span>
+            </span>
+            <span class="index__go" aria-hidden="true">→</span>
+          </a>
         </div>
       </section>
 
-      <!-- ── entrega ─────────────────────────────────────────────────────── -->
-      <section class="card">
-        <div class="card__head">
-          <h2>Entrega</h2>
-          <span class="hint">snapshot · trabajo · recibos</span>
-        </div>
-        <div class="table-wrap">
-          <table class="tbl" id="tbl-batches">
-            <thead>
-              <tr>
-                <th>mensaje</th>
-                <th>progreso</th>
-                <th>envelopes</th>
-                <th>cleanup</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
+      <section class="section deep">
+        <h2>Lo que este laboratorio no demuestra</h2>
+        <div class="lede">
+          <p>
+            PostgreSQL corre con una sola instancia: esto prueba consistencia de aplicación,
+            <strong>no</strong> alta disponibilidad de la base ni tolerancia de zona. Todavía
+            no hay Kubernetes, ni carga sostenida medida, ni inyección de fallos de red.
+          </p>
+          <p>
+            Tampoco hay balanceador: cada réplica expone su propio puerto y el reparto lo
+            hace esta página. Con Traefik eso deja de hacer falta.
+          </p>
         </div>
       </section>
 
-      <!-- ── operaciones ─────────────────────────────────────────────────── -->
-      <section class="card">
-        <div class="card__head">
-          <h2>Operaciones idempotentes</h2>
-          <span class="hint">últimas 20</span>
-        </div>
-        <div class="table-wrap">
-          <table class="tbl" id="tbl-operations">
-            <thead>
-              <tr>
-                <th>key</th>
-                <th>estado</th>
-                <th>intento</th>
-                <th>respuesta</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
-        </div>
-      </section>
-
-      <!-- ── log ─────────────────────────────────────────────────────────── -->
-      <section class="card card--wide">
-        <div class="card__head">
-          <h2>Requests</h2>
-          <span class="hint">qué réplica atendió cada uno</span>
-        </div>
-        <div class="log" id="log"></div>
-      </section>
+      <p class="footnote">
+        Escenarios y estado se apoyan en consultas contra la base, no en respuestas HTTP.
+        Contar <code>2xx</code> no demostraría ninguna de estas propiedades. El botón
+        <em>reiniciar</em> de cada escenario trunca las tablas: es la funcionalidad, no un
+        riesgo. Se apaga con <code>LAB_PANEL_ENABLED=false</code>.
+      </p>
     </main>
 
-    <script src="/panel.js"></script>
+    <script type="module">
+      import { mountTop, pollReplicas } from '/lib.js';
+
+      mountTop({ current: '/' });
+      void pollReplicas();
+      setInterval(() => void pollReplicas(), 3000);
+    </script>
   </body>
 </html>

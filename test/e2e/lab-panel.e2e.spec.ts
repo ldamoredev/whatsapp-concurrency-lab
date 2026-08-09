@@ -20,20 +20,40 @@ afterAll(async () => {
 });
 
 describe('el panel se sirve desde la propia API', () => {
-  it('sirve el HTML, el CSS y el JS', async () => {
-    const html = await fetch(`${baseUrl}/`);
+  it('sirve una pagina por escenario', async () => {
+    for (const [ruta, titulo] of [
+      ['/', 'Tres procesos'],
+      ['/idempotencia', 'Idempotencia'],
+      ['/orden', 'Orden y huecos'],
+      ['/entrega', 'Entrega multi-dispositivo'],
+      ['/infra', 'Réplicas y base'],
+    ]) {
+      const response = await fetch(`${baseUrl}${ruta}`);
+      expect(response.status, `ruta ${ruta}`).toBe(200);
+      expect(response.headers.get('content-type')).toContain('text/html');
+      expect(await response.text(), `ruta ${ruta}`).toContain(titulo);
+    }
+  });
+
+  it('sirve el CSS y los modulos JS con su content-type', async () => {
     const css = await fetch(`${baseUrl}/panel.css`);
-    const js = await fetch(`${baseUrl}/panel.js`);
-
-    expect(html.status).toBe(200);
-    expect(html.headers.get('content-type')).toContain('text/html');
-    expect(await html.text()).toContain('whatsapp-concurrency-lab');
-
     expect(css.status).toBe(200);
     expect(css.headers.get('content-type')).toContain('text/css');
 
-    expect(js.status).toBe(200);
-    expect(js.headers.get('content-type')).toContain('javascript');
+    for (const modulo of ['/lib.js', '/idempotencia.js', '/orden.js', '/entrega.js', '/infra.js']) {
+      const response = await fetch(`${baseUrl}${modulo}`);
+      expect(response.status, `modulo ${modulo}`).toBe(200);
+      expect(response.headers.get('content-type')).toContain('javascript');
+    }
+  });
+
+  it('no expone rutas fuera del mapa fijo', async () => {
+    // El controller declara un mapa cerrado de rutas: no hay path variable que
+    // sanitizar, asi que un traversal no tiene por donde entrar.
+    for (const ruta of ['/../package.json', '/panel.css/../../.env', '/no-existe.js']) {
+      const response = await fetch(`${baseUrl}${ruta}`);
+      expect([404, 400], `ruta ${ruta} devolvio ${response.status}`).toContain(response.status);
+    }
   });
 
   it('responde CORS para que el panel hable con las otras replicas', async () => {

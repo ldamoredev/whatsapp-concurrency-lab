@@ -23,7 +23,7 @@ describe('runner de migraciones', () => {
     const result = await migrate(testPool(), MIGRATIONS_DIR);
 
     expect(result.applied).toEqual([]);
-    expect(result.skipped.length).toBeGreaterThanOrEqual(5);
+    expect(result.skipped.length).toBeGreaterThanOrEqual(6);
   });
 
   it('DETECTA que una migracion ya aplicada fue editada', async () => {
@@ -56,6 +56,7 @@ describe('runner de migraciones', () => {
       '0003',
       '0004',
       '0005',
+      '0006',
     ]);
   });
 });
@@ -65,7 +66,11 @@ describe('schema aplicado', () => {
     const tables = await testPool().query<{ table_name: string }>(
       `SELECT table_name
          FROM information_schema.tables
-        WHERE table_schema = 'public' AND table_name <> 'schema_migrations'
+        WHERE table_schema = 'public'
+          AND table_name <> 'schema_migrations'
+          -- Las tablas espejo del panel (0006) no son parte del modelo: existen para
+          -- demostrar que pasa SIN las constraints y ningun camino real las toca.
+          AND table_name NOT LIKE 'naive_%'
         ORDER BY table_name`,
     );
 
@@ -81,6 +86,21 @@ describe('schema aplicado', () => {
       'idempotency_operations',
       'messages',
     ]);
+  });
+
+  it('las tablas espejo del panel NO tienen las constraints reales', async () => {
+    // Si alguna vez ganaran una constraint, el panel dejaria de poder demostrar el
+    // desastre que las constraints evitan, y el lado izquierdo mentiria.
+    const uniques = await testPool().query<{ count: string }>(
+      `SELECT count(*)::text AS count
+         FROM pg_indexes
+        WHERE schemaname = 'public'
+          AND tablename LIKE 'naive_%'
+          AND indexdef LIKE '%UNIQUE%'
+          AND indexname NOT LIKE '%_pkey'`,
+    );
+
+    expect(uniques.rows[0].count).toBe('0');
   });
 
   it('tiene los tres indices unicos que sostienen I1, I4 e I5', async () => {
