@@ -3,10 +3,13 @@ import type { Pool } from 'pg';
 import { AckService } from './application/ack.service';
 import { CleanupDeliveriesService } from './application/cleanup-deliveries.service';
 import { ExpireGapsService } from './application/expire-gaps.service';
+import { LabService } from './application/lab.service';
 import { SendMessageService } from './application/send-message.service';
 import { DatabaseModule, PG_POOL } from './infrastructure/database/database.module';
 import { AcksController } from './http/acks.controller';
 import { HealthController } from './http/health.controller';
+import { LabController } from './http/lab.controller';
+import { PanelController } from './http/panel.controller';
 import { MetricsController } from './http/metrics.controller';
 import { MessagesController } from './http/messages.controller';
 import { StreamsController } from './http/streams.controller';
@@ -20,9 +23,18 @@ function readInt(name: string, fallback: number): number {
 }
 
 /**
- * Slice 5: el dominio completo, mas salud, identidad de replica y metricas.
+ * El panel y sus endpoints se registran salvo que se apaguen explicitamente.
  *
- * Falta el panel (S6), Kubernetes (S7) y la carga con fallos (S8).
+ * `POST /lab/reset` TRUNCA todas las tablas. En este laboratorio eso es la
+ * funcionalidad, no un riesgo: el panel existe para provocar carreras y volver a
+ * empezar. En cualquier despliegue que no sea el lab, `LAB_PANEL_ENABLED=false`.
+ */
+export const LAB_PANEL_ENABLED = process.env.LAB_PANEL_ENABLED !== 'false';
+
+/**
+ * Slice 6: el dominio completo, salud, metricas y el panel de laboratorio.
+ *
+ * Falta Kubernetes (S7) y la carga con fallos (S8).
  */
 @Module({
   imports: [DatabaseModule],
@@ -32,6 +44,7 @@ function readInt(name: string, fallback: number): number {
     AcksController,
     HealthController,
     MetricsController,
+    ...(LAB_PANEL_ENABLED ? [LabController, PanelController] : []),
   ],
   providers: [
     {
@@ -60,6 +73,7 @@ function readInt(name: string, fallback: number): number {
     },
     ExpireGapsService,
     CleanupDeliveriesService,
+    LabService,
   ],
 })
 export class AppModule {}

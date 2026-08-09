@@ -69,11 +69,21 @@ Cerrado el 9 de agosto de 2026. Quedó afuera y sigue pendiente:
 - **No hay logs JSON estructurados** con `requestId`, `operationId`, `messageId` e
   `instanceId`. Hoy sólo hay un `console.error` en el filtro de errores.
 
-## S6 — el panel
+## ~~S6 — el panel~~ ✅ hecho
 
-Página servida por la propia API, sin framework ni build step. Muestra qué réplica atendió
-cada request, dispara las carreras (100 requests con la misma key, 1-3-4-2, acks
-concurrentes) y muestra la base en vivo. Estética de herramienta de observabilidad.
+Cerrado el 9 de agosto de 2026. Quedó afuera y sigue pendiente:
+
+- **Las réplicas están hardcodeadas** en `public/panel.js` (`:3001`, `:3002`, `:3003`).
+  Cuando llegue Traefik el panel apunta a una sola URL y la lista desaparece; mientras
+  tanto, cambiar de puertos exige tocar el archivo.
+- **`/lab/expire-gaps?force=true`** adelanta los deadlines para no esperar el
+  `gapTimeoutMs` real. No cambia la lógica del barrido, pero es una comodidad del panel
+  que no debería existir fuera del lab.
+- **El panel no muestra las métricas de negocio** que ahora sí se incrementan
+  (`lab_idempotency_outcomes_total`, `lab_ack_transitions_total`). Las lee sólo para el
+  contador de POST por réplica. Cuando esté Grafana, ahí van.
+- **Sin gráficos de series temporales**: el panel muestra el estado actual, no la
+  evolución. Eso es trabajo de Grafana, no del panel.
 
 ## S7 — Kubernetes
 

@@ -9,6 +9,7 @@ import {
 } from '../domain/delivery/receipt-state';
 import { DeviceNotInSnapshotError, MessageNotFoundError } from '../domain/idempotency/errors';
 import { PG_POOL } from '../infrastructure/database/database.module';
+import { ackTransitions, deliveryCleanups } from '../observability/metrics';
 import {
   advanceReceipt,
   findBatchProgress,
@@ -98,6 +99,9 @@ export class AckService {
 
       // 2. ¿Avanza? Un ack duplicado o atrasado no es un error: es un no-op.
       if (!advances(current.state, command.state)) {
+        // `none` cuenta los duplicados y atrasados. Que sea una serie propia permite
+        // ver en el dashboard cuanto trafico de ack es puro reintento.
+        ackTransitions.inc({ transition: 'none' });
         const progress = await findBatchProgress(client, command.messageId);
         await client.query('COMMIT');
         return this.resultOf(command, current, progress, false, false);
@@ -114,6 +118,7 @@ export class AckService {
       );
 
       if (updated === null) {
+        ackTransitions.inc({ transition: 'none' });
         const fresh = await lockReceipt(client, command.messageId, command.deviceId);
         const progress = await findBatchProgress(client, command.messageId);
         await client.query('COMMIT');
@@ -138,10 +143,17 @@ export class AckService {
         //    el CronJob por la misma puerta (`cleanup_at IS NULL`); uno solo gana.
         if (progress.completedAt !== null && this.options.cleanupOnComplete) {
           cleanedUp = (await cleanupBatch(client, command.messageId)) !== null;
+          if (cleanedUp) {
+            deliveryCleanups.inc({ reason: 'completed' });
+          }
         }
       } else {
         progress = await findBatchProgress(client, command.messageId);
       }
+
+      ackTransitions.inc({
+        transition: updated.state === 'read' ? 'to_read' : 'to_delivered',
+      });
 
       await client.query('COMMIT');
       return this.resultOf(command, updated, progress, true, cleanedUp);

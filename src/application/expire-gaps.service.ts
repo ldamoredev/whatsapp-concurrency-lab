@@ -5,6 +5,7 @@ import {
   expireOverdueGaps,
   type DeviceStream,
 } from '../infrastructure/persistence/device-sequences.repository';
+import { streamResyncRequired } from '../observability/metrics';
 
 /**
  * Vencimiento de huecos.
@@ -29,6 +30,10 @@ export class ExpireGapsService {
 
   /** Manda a `resync_required` los streams cuyo hueco vencio. Devuelve los afectados. */
   async run(): Promise<DeviceStream[]> {
-    return expireOverdueGaps(this.pool);
+    const expired = await expireOverdueGaps(this.pool);
+    if (expired.length > 0) {
+      streamResyncRequired.inc(expired.length);
+    }
+    return expired;
   }
 }

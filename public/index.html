@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>whatsapp-concurrency-lab · panel</title>
+    <link rel="stylesheet" href="/panel.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>◧</text></svg>"
+    />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="topbar__title">
+        <h1>whatsapp-concurrency-lab</h1>
+        <p>idempotencia · orden por conversación · concurrencia multi-dispositivo</p>
+      </div>
+      <div class="topbar__right">
+        <div class="invariants" id="invariants">
+          <span class="invariants__label">invariantes</span>
+          <span class="invariants__value" id="invariants-value">—</span>
+        </div>
+        <button class="btn btn--ghost" id="btn-reset">reiniciar laboratorio</button>
+      </div>
+    </header>
+
+    <main class="grid">
+      <!-- ── réplicas ────────────────────────────────────────────────────── -->
+      <section class="card card--wide">
+        <div class="card__head">
+          <h2>Réplicas</h2>
+          <span class="hint">tres procesos, memorias separadas, una sola base</span>
+        </div>
+        <div class="replicas" id="replicas"></div>
+      </section>
+
+      <!-- ── escenarios ──────────────────────────────────────────────────── -->
+      <section class="card card--wide">
+        <div class="card__head">
+          <h2>Escenarios</h2>
+          <span class="hint">cada botón provoca una carrera real contra las réplicas</span>
+        </div>
+        <div class="scenarios">
+          <button class="scenario" id="sc-c1" data-scenario="c1">
+            <span class="scenario__tag">C1</span>
+            <span class="scenario__name">Carrera de idempotencia</span>
+            <span class="scenario__desc">100 requests concurrentes con la misma key, repartidos entre las tres réplicas</span>
+            <span class="scenario__expect">esperado: 1 mensaje, 1 batch</span>
+          </button>
+
+          <button class="scenario" id="sc-c1b" data-scenario="c1b">
+            <span class="scenario__tag">I2</span>
+            <span class="scenario__name">Key reusada</span>
+            <span class="scenario__desc">misma key con cuerpos distintos: el primero gana, el resto es conflicto</span>
+            <span class="scenario__expect">esperado: ningún efecto extra</span>
+          </button>
+
+          <button class="scenario" id="sc-c3" data-scenario="c3">
+            <span class="scenario__tag">C3</span>
+            <span class="scenario__name">Orden y huecos</span>
+            <span class="scenario__desc">envía 1, 3, 4 y después el 2: los adelantados esperan sin orden visible</span>
+            <span class="scenario__expect">esperado: 1→2→3→4 al drenar</span>
+          </button>
+
+          <button class="scenario" id="sc-gap" data-scenario="gap">
+            <span class="scenario__tag">C3</span>
+            <span class="scenario__name">Hueco que vence</span>
+            <span class="scenario__desc">deja un hueco abierto y corre el barrido: el stream se bloquea</span>
+            <span class="scenario__expect">esperado: resync_required, nada publicado</span>
+          </button>
+
+          <button class="scenario" id="sc-c4" data-scenario="c4">
+            <span class="scenario__tag">C4</span>
+            <span class="scenario__name">Acks multi-dispositivo</span>
+            <span class="scenario__desc">acks duplicados, fuera de orden y concurrentes desde las tres réplicas</span>
+            <span class="scenario__expect">esperado: un solo cleanup</span>
+          </button>
+
+          <button class="scenario" id="sc-kill" data-scenario="kill">
+            <span class="scenario__tag">I11</span>
+            <span class="scenario__name">Carga sostenida</span>
+            <span class="scenario__desc">200 envíos mezclando únicos, retries y conflictos mientras mirás el reparto</span>
+            <span class="scenario__expect">esperado: cero invariantes rotas</span>
+          </button>
+        </div>
+        <div class="result" id="result" hidden></div>
+      </section>
+
+      <!-- ── conversación ────────────────────────────────────────────────── -->
+      <section class="card">
+        <div class="card__head">
+          <h2>Orden visible</h2>
+          <span class="hint" id="counter-hint">—</span>
+        </div>
+        <div class="table-wrap">
+          <table class="tbl" id="tbl-messages">
+            <thead>
+              <tr>
+                <th>client</th>
+                <th>server</th>
+                <th>estado</th>
+                <th>cuerpo</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- ── streams ─────────────────────────────────────────────────────── -->
+      <section class="card">
+        <div class="card__head">
+          <h2>Streams por dispositivo</h2>
+          <span class="hint">próximo client_sequence esperado</span>
+        </div>
+        <div class="table-wrap">
+          <table class="tbl" id="tbl-streams">
+            <thead>
+              <tr>
+                <th>dispositivo</th>
+                <th>próximo</th>
+                <th>estado</th>
+                <th>deadline</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- ── entrega ─────────────────────────────────────────────────────── -->
+      <section class="card">
+        <div class="card__head">
+          <h2>Entrega</h2>
+          <span class="hint">snapshot · trabajo · recibos</span>
+        </div>
+        <div class="table-wrap">
+          <table class="tbl" id="tbl-batches">
+            <thead>
+              <tr>
+                <th>mensaje</th>
+                <th>progreso</th>
+                <th>envelopes</th>
+                <th>cleanup</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- ── operaciones ─────────────────────────────────────────────────── -->
+      <section class="card">
+        <div class="card__head">
+          <h2>Operaciones idempotentes</h2>
+          <span class="hint">últimas 20</span>
+        </div>
+        <div class="table-wrap">
+          <table class="tbl" id="tbl-operations">
+            <thead>
+              <tr>
+                <th>key</th>
+                <th>estado</th>
+                <th>intento</th>
+                <th>respuesta</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- ── log ─────────────────────────────────────────────────────────── -->
+      <section class="card card--wide">
+        <div class="card__head">
+          <h2>Requests</h2>
+          <span class="hint">qué réplica atendió cada uno</span>
+        </div>
+        <div class="log" id="log"></div>
+      </section>
+    </main>
+
+    <script src="/panel.js"></script>
+  </body>
+</html>

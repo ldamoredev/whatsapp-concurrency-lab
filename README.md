@@ -7,7 +7,7 @@ vocabulario con el que se hacen visibles esas carreras.
 El alcance completo del proyecto está en [`docs/ALCANCE.md`](docs/ALCANCE.md). Ese archivo
 manda y no se edita desde acá.
 
-## Estado: dominio completo + contenedor, salud y métricas
+## Estado: dominio completo + contenedor, salud, métricas y panel
 
 Lo que existe hoy:
 
@@ -24,12 +24,55 @@ Lo que existe hoy:
 - **Salud, identidad y métricas**: las tres probes con responsabilidades distintas,
   `X-Instance-Id` en cada respuesta, `/metrics` en formato Prometheus y apagado ordenado
   probado (no-ready → drenar → cerrar pool).
-- **165 tests**: unit, integración contra PostgreSQL real y e2e HTTP, incluidos C1 (100
+- **Panel de laboratorio** servido por la propia API: qué réplica atendió cada request,
+  botones que disparan las carreras de verdad contra las tres réplicas, y el estado de la
+  base en vivo con la verificación de invariantes siempre a la vista.
+- **171 tests**: unit, integración contra PostgreSQL real y e2e HTTP, incluidos C1 (100
   requests concurrentes), C2 (respuesta perdida post-commit), C3 (1, 3, 4 → 2 y el hueco
   que vence) y C4 (acks duplicados, fuera de orden y concurrentes con el CronJob).
 
-Lo que **no** existe todavía: el panel web, Kubernetes, k6, Toxiproxy y Grafana.
+Lo que **no** existe todavía: Kubernetes, k6, Toxiproxy y Grafana.
 Ver [`docs/PENDIENTE.md`](docs/PENDIENTE.md).
+
+## El panel
+
+```bash
+npm run stack:up
+```
+
+Y abrir **http://localhost:3001**.
+
+Seis botones, cada uno provoca una carrera real repartida entre las tres réplicas — no una
+simulación: el navegador manda los requests y el reparto se ve en vivo.
+
+| Escenario | Qué provoca | Qué demuestra |
+|---|---|---|
+| **C1** Carrera de idempotencia | 100 requests concurrentes, misma key | 1 creado · N replays · el resto en curso |
+| **I2** Key reusada | misma key, cuerpos distintos | conflicto sin ningún efecto extra |
+| **C3** Orden y huecos | 1, 3, 4 y después el 2 | los adelantados esperan sin orden visible |
+| **C3** Hueco que vence | deja un hueco y corre el barrido | `resync_required`, nada publicado en silencio |
+| **C4** Acks multi-dispositivo | acks duplicados + CronJob en paralelo | un solo cleanup |
+| **I11** Carga sostenida | 200 envíos mezclados | cero invariantes rotas |
+
+Arriba a la derecha, el contador de invariantes corre **contra la base** (I4, I5, I8, I9) y
+tiene que decir siempre *sin violaciones*. Contar respuestas 2xx no demostraría nada.
+
+Corrida real de C1 sobre las tres réplicas:
+
+```text
+201 creado 1   ·   200 replay 91   ·   409 en curso 8   ·   ganó api-1
+api-1 ████ 34    api-2 ████ 33    api-3 ████ 33
+```
+
+Y de C4:
+
+```text
+15 acks + 4 corridas del CronJob, todo concurrente
+avanzaron 3   ·   sin efecto 12   ·   cleanups 1
+```
+
+> El panel y `POST /lab/reset` **truncan la base**: existen para provocar carreras y volver
+> a empezar. Se apagan con `LAB_PANEL_ENABLED=false`.
 
 ## Tres réplicas en un comando
 

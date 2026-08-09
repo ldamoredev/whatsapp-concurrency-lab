@@ -41,6 +41,10 @@ COPY --from=builder /app/dist ./dist
 # distinto del que la aplicacion espera.
 COPY migrations ./migrations
 
+# El panel: HTML, CSS y JS planos, sin build step. Se leen en cada request para poder
+# editarlos y recargar sin reconstruir la imagen.
+COPY public ./public
+
 # `node` es un usuario sin privilegios que ya trae la imagen oficial. Correr como root
 # dentro del contenedor no aporta nada y amplia lo que un exploit puede hacer.
 USER node

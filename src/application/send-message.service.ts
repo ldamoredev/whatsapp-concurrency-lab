@@ -20,6 +20,11 @@ import {
 } from '../domain/idempotency/idempotency-operation';
 import { PG_POOL } from '../infrastructure/database/database.module';
 import {
+  idempotencyOutcomes,
+  messagesBuffered,
+  messagesPublished,
+} from '../observability/metrics';
+import {
   createDeliveries,
   snapshotRecipients,
 } from '../infrastructure/persistence/deliveries.repository';
@@ -185,11 +190,13 @@ export class SendMessageService {
     // intacto. Se chequea ANTES que el status: una key reusada es un error del cliente
     // sin importar en que estado este la operacion original.
     if (operation.fingerprint !== fingerprint) {
+      idempotencyOutcomes.inc({ outcome: 'conflict' });
       throw new IdempotencyKeyReusedError(command.idempotencyKey);
     }
 
     if (operation.status === 'completed') {
       // I3 — el retry devuelve el resultado ya persistido, sin repetir el efecto.
+      idempotencyOutcomes.inc({ outcome: 'replay' });
       return {
         kind: 'replay',
         result: {
@@ -220,6 +227,7 @@ export class SendMessageService {
     // tres pods con relojes minimamente distintos tomaran decisiones distintas sobre
     // la misma operacion.
     if (operation.leaseIsAlive) {
+      idempotencyOutcomes.inc({ outcome: 'in_progress' });
       throw new IdempotencyInProgressError(command.idempotencyKey, this.retryAfterSeconds());
     }
 
@@ -391,6 +399,8 @@ export class SendMessageService {
       lease,
     );
 
+    idempotencyOutcomes.inc({ outcome: 'owner' });
+    messagesBuffered.inc();
     return { status: 202, replayed: false, payload };
   }
 
@@ -511,6 +521,11 @@ export class SendMessageService {
       lease,
     );
 
+    idempotencyOutcomes.inc({ outcome: 'owner' });
+    messagesPublished.inc({ origin: 'direct' });
+    if (drained > 0) {
+      messagesPublished.inc({ origin: 'drained' }, drained);
+    }
     return { status: 201, replayed: false, payload };
   }
 
@@ -583,6 +598,7 @@ export class SendMessageService {
       lease,
     );
 
+    idempotencyOutcomes.inc({ outcome: 'replay' });
     return { status: 200, replayed: true, payload };
   }
 
@@ -596,6 +612,7 @@ export class SendMessageService {
     lease: OperationLease,
   ): void {
     if (!completed) {
+      idempotencyOutcomes.inc({ outcome: 'lease_lost' });
       throw new IdempotencyLeaseLostError(command.idempotencyKey, lease.attempt);
     }
   }

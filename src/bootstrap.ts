@@ -2,7 +2,7 @@ import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
 import type { Pool } from 'pg';
-import { AppModule } from './app.module';
+import { AppModule, LAB_PANEL_ENABLED } from './app.module';
 import { DomainErrorFilter } from './http/domain-error.filter';
 import { PG_POOL } from './infrastructure/database/database.module';
 import { INSTANCE_ID } from './observability/instance';
@@ -26,6 +26,16 @@ export async function createApp(options: { logger?: boolean } = {}): Promise<Nes
   });
 
   app.useGlobalFilters(new DomainErrorFilter());
+
+  // CORS abierto SOLO cuando el panel esta habilitado.
+  //
+  // El panel se sirve desde una replica y manda requests a las otras dos, que estan en
+  // puertos distintos: sin CORS el navegador bloquea justamente la parte que se quiere
+  // demostrar. Con Traefik las tres van a estar detras del mismo origen y esto deja de
+  // hacer falta.
+  if (LAB_PANEL_ENABLED) {
+    app.enableCors({ origin: true, exposedHeaders: ['X-Instance-Id', 'X-Idempotent-Replay'] });
+  }
   registerHttpInstrumentation(app);
   registerPoolMetrics(app.get<Pool>(PG_POOL));
 

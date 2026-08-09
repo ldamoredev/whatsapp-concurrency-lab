@@ -6,6 +6,7 @@ import {
   findCleanupViolations,
   type CleanedBatch,
 } from '../infrastructure/persistence/cleanup.repository';
+import { deliveryCleanups } from '../observability/metrics';
 
 /**
  * Liberacion del trabajo de entrega.
@@ -35,6 +36,10 @@ export class CleanupDeliveriesService {
       await client.query('BEGIN ISOLATION LEVEL READ COMMITTED');
       const cleaned = await cleanupEligibleBatches(client, limit);
       await client.query('COMMIT');
+
+      for (const batch of cleaned) {
+        deliveryCleanups.inc({ reason: batch.reason });
+      }
       return cleaned;
     } catch (error) {
       await client.query('ROLLBACK').catch(() => undefined);
