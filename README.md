@@ -7,23 +7,24 @@ vocabulario con el que se hacen visibles esas carreras.
 El alcance completo del proyecto está en [`docs/ALCANCE.md`](docs/ALCANCE.md). Ese archivo
 manda y no se edita desde acá.
 
-## Estado: slice 3 de 4 — orden por conversación y huecos
+## Estado: los cuatro slices de dominio, completos
 
 Lo que existe hoy:
 
 - Node LTS + TypeScript + NestJS con Fastify, PostgreSQL 16 en Docker Compose.
 - Migraciones SQL versionadas con las 10 tablas del modelo mínimo y sus constraints.
 - **Envío idempotente**: lease + fencing por `attempt`, respuesta reproducible, replay.
-- **Orden por conversación con política de huecos**: los mensajes adelantados quedan
-  `buffered` sin orden visible ni deliveries; al llegar el que falta se publican todos en
-  cascada, en un solo commit. Un hueco vencido bloquea el stream y exige un resync
-  explícito del cliente.
-- **129 tests**: unit, integración contra PostgreSQL real y e2e HTTP, incluidos C1 (100
-  requests concurrentes), C2 (respuesta perdida post-commit) y C3 (1, 3, 4 → 2, más el
-  hueco que vence).
+- **Orden por conversación con política de huecos**: los adelantados quedan `buffered` sin
+  orden visible ni deliveries; al llegar el que falta se publican en cascada. Un hueco
+  vencido bloquea el stream y exige un resync explícito del cliente.
+- **Entrega multi-dispositivo**: acks monotónicos e idempotentes, progreso atado al cambio
+  real de estado, y cleanup de envelopes que ocurre una sola vez — con la razón declarada.
+- **158 tests**: unit, integración contra PostgreSQL real y e2e HTTP, incluidos C1 (100
+  requests concurrentes), C2 (respuesta perdida post-commit), C3 (1, 3, 4 → 2 y el hueco
+  que vence) y C4 (acks duplicados, fuera de orden y concurrentes con el CronJob).
 
-Lo que **no** existe todavía, a propósito: acks y cleanup de envelopes (S4), Kubernetes,
-k6, Toxiproxy, Prometheus. Ver [`docs/PENDIENTE.md`](docs/PENDIENTE.md).
+Lo que **no** existe todavía: Kubernetes, k6, Toxiproxy, Prometheus, health y métricas.
+Ver [`docs/PENDIENTE.md`](docs/PENDIENTE.md).
 
 ## La API
 
@@ -66,6 +67,23 @@ hueco. `POST .../stream/resync` con `{ "fromClientSequence": N }` es la **única
 saltar un hueco, y la decide el cliente — nunca el servidor. Ver
 [ADR 0002](docs/adr/0002-orden-antes-que-disponibilidad.md).
 
+### `POST /v1/messages/:messageId/acks`
+
+Body `{ "deviceId": "uuid", "state": "delivered" | "read" }`. **No lleva
+`Idempotency-Key` y no la necesita**: el estado del recibo *es* la clave. El mismo ack
+repetido veinte veces mueve el recibo una sola vez, porque la condición de avance vive en el
+`WHERE` del `UPDATE`.
+
+| Situación | Respuesta |
+|---|---|
+| el ack avanza el estado | `200` con `advanced: true` |
+| ack duplicado o atrasado | `200` con `advanced: false`, sin tocar nada |
+| el último que faltaba | `200` con `batch.completed` y `batch.cleanedUp` |
+| dispositivo fuera del snapshot | `404 DEVICE_NOT_IN_SNAPSHOT` |
+
+`GET /v1/messages/:messageId/receipts/:deviceId` devuelve el recibo durable, que
+**sobrevive al cleanup de los envelopes**.
+
 ### `GET /v1/messages/:messageId` y `GET /v1/operations/:key`
 
 Consulta para recovery y para verificar invariantes. `GET /v1/operations/:key` requiere el
@@ -82,9 +100,14 @@ npm run demo
 npm run demo:huecos
 ```
 
-Dos demos narradas que levantan la API, mandan requests HTTP reales y muestran el estado de
-cada tabla después de cada paso. La primera recorre el contrato de idempotencia; la segunda,
-la política de huecos (1, 3, 4 → 2, el hueco que vence y el resync).
+```bash
+npm run demo:entrega
+```
+
+Tres demos narradas que levantan la API, mandan requests HTTP reales y muestran el estado de
+cada tabla después de cada paso: el contrato de idempotencia, la política de huecos
+(1, 3, 4 → 2, el hueco que vence y el resync) y la entrega multi-dispositivo (acks
+duplicados y fuera de orden, con el CronJob corriendo en paralelo).
 
 ### El contrato en cuatro comandos
 
@@ -116,6 +139,7 @@ Credenciales del laboratorio: `lab` / `lab`, base `whatsapp_lab`.
 | `npm run migrate:status` | muestra qué está aplicado y qué falta |
 | `npm run db:reset` | **borra el volumen** y vuelve a levantar limpio |
 | `npm run gaps:expire` | barre los huecos vencidos (el futuro CronJob) |
+| `npm run deliveries:cleanup` | libera el trabajo de entrega terminado o vencido, y verifica I9 |
 | `npm run db:down` | baja el contenedor conservando los datos |
 | `npm run build` / `npm start` | compila y arranca la API (hoy sin rutas) |
 
@@ -150,6 +174,7 @@ contra Postgres.
 | `test/integration/*.constraints.spec.ts` | cada constraint del schema, probada por violación |
 | `test/integration/send-message.spec.ts` | contrato de idempotencia, lease, fencing, **C1**, **C2** |
 | `test/integration/order-and-gaps.spec.ts` | buffering, drenado, expiración y resync: **C3** |
+| `test/integration/acks-and-cleanup.spec.ts` | monotonía, conteo, cleanup único y TTL: **C4** |
 | `test/e2e/` | HTTP real: status, headers, códigos de error, C1 sobre el endpoint |
 
 ## Cómo están escritos los tests
@@ -230,7 +255,8 @@ Cada constraint lleva en la migración un comentario con la carrera concreta que
 | **I6** un mensaje con hueco no se vuelve visible | `messages_published_iff_server_sequence` + política de huecos | [0003](migrations/0003_messages.sql) |
 | **I7** un receipt nunca retrocede | `delivery_receipts_pkey` + `delivery_receipts_state_matches_timestamps` + `version` | [0004](migrations/0004_delivery.sql) |
 | **I8** un ack duplicado no cuenta dos veces | `delivery_envelopes_message_device_uniq`, `delivery_batches_delivered_not_above_expected` | [0004](migrations/0004_delivery.sql) |
-| **I9** no hay cleanup con dispositivos pendientes | `delivery_batches_cleanup_requires_completion` | [0004](migrations/0004_delivery.sql) |
+| **I9** no hay cleanup con dispositivos pendientes | `delivery_batches_cleanup_requires_completion_or_expiry` | [0005](migrations/0005_cleanup_reason.sql) |
+| **I10** el cleanup final ocurre una sola vez | `UPDATE ... WHERE cleanup_at IS NULL` | [cleanup.repository.ts](src/infrastructure/persistence/cleanup.repository.ts) |
 
 Dos aclaraciones honestas sobre el alcance de lo que el schema garantiza hoy:
 
@@ -241,8 +267,8 @@ Dos aclaraciones honestas sobre el alcance de lo que el schema garantiza hoy:
 - **I7 no se resuelve con un CHECK.** Un CHECK no ve la fila anterior, así que no puede
   expresar "el nuevo estado debe ser ≥ el viejo". Lo que sí garantiza el schema es que
   ningún estado incoherente exista (un recibo `read` sin `delivered_at` es imposible). La
-  monotonicidad se impone con un UPDATE condicional sobre `version`, y se prueba en el
-  slice 4.
+  monotonicidad se impone en el `WHERE` del `UPDATE`, comparando posiciones de estado con
+  `array_position`, más un compare-and-set sobre `version`.
 
 ## Decisiones de acceso a datos
 
@@ -259,6 +285,10 @@ lancen a la vez — y rechaza una migración ya aplicada que fue editada.
 **Aislamiento por caso, no global.** El default es `READ COMMITTED` con constraints y locks
 explícitos. Subir el aislamiento global sin medir sería tapar el problema en vez de
 resolverlo. Cada decisión se documenta donde se toma.
+
+**El cleanup declara por qué limpia.** Un batch se libera porque terminó o porque venció el
+TTL, y esas dos cosas se distinguen y se auditan por separado — un `expired` nunca se
+disfraza de entrega exitosa: [ADR 0003](docs/adr/0003-cleanup-con-razon-declarada.md).
 
 **Ante un hueco, se preserva el orden y se sacrifica disponibilidad de ese dispositivo.**
 Un mensaje adelantado espera; si el hueco vence, el stream se bloquea y el cliente decide.
@@ -283,7 +313,7 @@ docs/PENDIENTE.md    scope creep anotado para slices posteriores
 docs/adr/            sólo decisiones que cambian una garantía
 migrations/          SQL versionado, con el race que previene cada constraint
 src/domain/          fingerprint, errores y tipos del dominio
-src/application/     SendMessageService: el contrato de idempotencia
+src/application/     SendMessageService, AckService y los dos barridos
 src/infrastructure/  pool, migrator y repositorios SQL
 src/http/            controller, validación de entrada y mapeo de errores
 test/unit/           lógica pura, sin base

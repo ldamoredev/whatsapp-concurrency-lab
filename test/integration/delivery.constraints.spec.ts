@@ -52,7 +52,8 @@ describe('separacion entre trabajo de entrega y recibo durable', () => {
     );
     await pool.query(
       `UPDATE delivery_batches
-          SET delivered_count = expected_count, completed_at = now(), cleanup_at = now()
+          SET delivered_count = expected_count, completed_at = now(),
+              cleanup_at = now(), cleanup_reason = 'completed'
         WHERE message_id = $1`,
       [messageId],
     );
@@ -168,11 +169,11 @@ describe('delivery_batches — un solo snapshot por mensaje', () => {
     );
   });
 
-  it('RECHAZA limpiar un batch que nunca se completo (I9)', async () => {
+  it('RECHAZA limpiar por "completed" un batch que nunca se completo (I9)', async () => {
     const messageId = await publishWithDeliveries(fixture, 1, 1);
 
-    // Dos dispositivos de tres ackearon: queda trabajo pendiente. Marcar cleanup_at
-    // aca borraria envelopes que alguien todavia espera.
+    // Dos dispositivos de tres ackearon: queda trabajo pendiente. Declarar el cleanup
+    // como `completed` borraria envelopes que alguien todavia espera.
     await testPool().query(
       'UPDATE delivery_batches SET delivered_count = 2 WHERE message_id = $1',
       [messageId],
@@ -180,14 +181,66 @@ describe('delivery_batches — un solo snapshot por mensaje', () => {
 
     await expectViolation(
       () =>
+        testPool().query(
+          `UPDATE delivery_batches SET cleanup_at = now(), cleanup_reason = 'completed'
+            WHERE message_id = $1`,
+          [messageId],
+        ),
+      {
+        code: PG_ERROR.CHECK_VIOLATION,
+        constraint: 'delivery_batches_cleanup_requires_completion_or_expiry',
+      },
+    );
+  });
+
+  it('RECHAZA limpiar sin declarar por que', async () => {
+    const messageId = await publishWithDeliveries(fixture, 1, 1);
+
+    // Sin razon no hay auditoria posible: despues del cleanup no habria forma de
+    // distinguir un batch que termino de uno que se abandono por TTL.
+    await expectViolation(
+      () =>
         testPool().query('UPDATE delivery_batches SET cleanup_at = now() WHERE message_id = $1', [
           messageId,
         ]),
-      {
-        code: PG_ERROR.CHECK_VIOLATION,
-        constraint: 'delivery_batches_cleanup_requires_completion',
-      },
+      { code: PG_ERROR.CHECK_VIOLATION, constraint: 'delivery_batches_cleanup_has_reason' },
     );
+  });
+
+  it('RECHAZA una razon de cleanup inventada', async () => {
+    const messageId = await publishWithDeliveries(fixture, 1, 1);
+
+    await expectViolation(
+      () =>
+        testPool().query(
+          `UPDATE delivery_batches SET cleanup_at = now(), cleanup_reason = 'porque si'
+            WHERE message_id = $1`,
+          [messageId],
+        ),
+      { code: PG_ERROR.CHECK_VIOLATION, constraint: 'delivery_batches_cleanup_reason_valid' },
+    );
+  });
+
+  it('PERMITE limpiar por TTL un batch incompleto, dejando registrado que expiro', async () => {
+    const messageId = await publishWithDeliveries(fixture, 1, 1);
+
+    // El caso que el CHECK original del slice 1 volvia imposible: un dispositivo que
+    // nunca vuelve no puede dejar envelopes colgados para siempre.
+    await testPool().query(
+      `UPDATE delivery_batches
+          SET expires_at = now() - interval '1 hour',
+              cleanup_at = now(), cleanup_reason = 'expired'
+        WHERE message_id = $1`,
+      [messageId],
+    );
+
+    const stored = await testPool().query<{ completed_at: Date | null; cleanup_reason: string }>(
+      'SELECT completed_at, cleanup_reason FROM delivery_batches WHERE message_id = $1',
+      [messageId],
+    );
+    // No se disfraza de entrega exitosa: completed_at sigue nulo.
+    expect(stored.rows[0].completed_at).toBeNull();
+    expect(stored.rows[0].cleanup_reason).toBe('expired');
   });
 
   it('RECHAZA declarar completo un batch con progreso incompleto', async () => {

@@ -23,7 +23,7 @@ describe('runner de migraciones', () => {
     const result = await migrate(testPool(), MIGRATIONS_DIR);
 
     expect(result.applied).toEqual([]);
-    expect(result.skipped.length).toBeGreaterThanOrEqual(4);
+    expect(result.skipped.length).toBeGreaterThanOrEqual(5);
   });
 
   it('DETECTA que una migracion ya aplicada fue editada', async () => {
@@ -50,7 +50,13 @@ describe('runner de migraciones', () => {
       'SELECT version, name FROM schema_migrations ORDER BY version',
     );
 
-    expect(applied.rows.map((row) => row.version)).toEqual(['0001', '0002', '0003', '0004']);
+    expect(applied.rows.map((row) => row.version)).toEqual([
+      '0001',
+      '0002',
+      '0003',
+      '0004',
+      '0005',
+    ]);
   });
 });
 

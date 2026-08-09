@@ -23,7 +23,9 @@
     "test:unit": "vitest run --project unit",
     "demo": "tsx scripts/demo-envio-idempotente.ts",
     "gaps:expire": "tsx scripts/expire-gaps.ts",
-    "demo:huecos": "tsx scripts/demo-orden-y-huecos.ts"
+    "demo:huecos": "tsx scripts/demo-orden-y-huecos.ts",
+    "deliveries:cleanup": "tsx scripts/cleanup-deliveries.ts",
+    "demo:entrega": "tsx scripts/demo-entrega.ts"
   },
   "dependencies": {
     "@nestjs/common": "^11.1.6",

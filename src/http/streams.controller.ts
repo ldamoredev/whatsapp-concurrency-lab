@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Inject, Param, Post } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Inject, Param, Post } from '@nestjs/common';
 import { SendMessageService } from '../application/send-message.service';
 import { parseResyncBody, parseUuidParam } from './dto/send-message.dto';
 
@@ -41,6 +41,8 @@ export class StreamsController {
    * aquel mensaje 2 se perdio para siempre o todavia puede reenviarlo es el, no el
    * servidor. Lo que ya estaba bufferizado desde esa posicion se publica en orden.
    */
+  // 200: el resync mueve un puntero que ya existe, no crea nada.
+  @HttpCode(200)
   @Post('resync')
   async resync(
     @Param('conversationId') conversationId: string,

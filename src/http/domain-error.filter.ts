@@ -2,6 +2,7 @@ import { ArgumentsHost, Catch, ExceptionFilter, HttpException } from '@nestjs/co
 import type { FastifyReply } from 'fastify';
 import {
   ClientSequenceConflictError,
+  DeviceNotInSnapshotError,
   DomainError,
   IdempotencyInProgressError,
   IdempotencyKeyReusedError,
@@ -85,6 +86,9 @@ function statusFor(error: DomainError): number {
   if (error instanceof MessageNotFoundError) return 404;
   if (error instanceof OperationNotFoundError) return 404;
   if (error instanceof StreamNotFoundError) return 404;
+
+  // 404 y no 403: desde afuera, "no sos del snapshot" y "no existe" son lo mismo.
+  if (error instanceof DeviceNotInSnapshotError) return 404;
 
   return 500;
 }

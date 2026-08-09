@@ -1,4 +1,4 @@
-# Pendiente — anotado durante los slices 1, 2 y 3
+# Pendiente — anotado durante los cuatro slices de dominio
 
 Cosas que aparecieron mientras se escribía y que **no** entran todavía. Se anotan acá para
 no perderlas y para no meterlas antes de tiempo.
@@ -37,17 +37,21 @@ Cerrado el 8 de agosto de 2026. Ver
   medir cuántos `resync_required` produce en la práctica.
 - Falta métrica de gaps activos y su edad, y de transiciones a `resync_required`.
 
-## Slice 4 — multi-device
+## ~~Slice 4 — multi-device~~ ✅ hecho
 
-- `POST /v1/messages/:messageId/acks`.
-- UPDATE condicional sobre `delivery_receipts` con `WHERE version = $leido` y avance sólo
-  hacia adelante. **Esto es I7 y no lo cubre ningún CHECK** — el schema garantiza que no
-  exista un estado incoherente, no que no haya una regresión.
-- El incremento de `delivered_count` tiene que estar atado a que el receipt haya cambiado
-  realmente de estado, en la misma transacción (I8).
-- Cleanup de envelopes: una sola vez, sólo con el batch completo o TTL vencido. Forzar la
-  carrera contra el CronJob.
-- El estado terminal que habilita cleanup se fija por configuración. Default `delivered`.
+Cerrado el 9 de agosto de 2026. Ver
+[ADR 0003](adr/0003-cleanup-con-razon-declarada.md). Quedó afuera y sigue pendiente:
+
+- **Ni el cleanup ni el barrido de huecos corren solos.** `npm run deliveries:cleanup` y
+  `npm run gaps:expire` son los cuerpos exactos de los futuros CronJobs, pero hoy hay que
+  invocarlos a mano. El cleanup por batch completo sí ocurre solo, disparado por el último
+  ack; el que falta es el barrido por TTL.
+- **No hay endpoint para listar los receipts de un mensaje.** Hoy se consulta de a uno por
+  dispositivo. Para un cliente real haría falta el listado.
+- **`DELIVERY_TERMINAL_STATE` cambia el comportamiento en caliente.** Si se cambia de
+  `delivered` a `read` con batches en vuelo, los que ya contaron progreso con el umbral
+  viejo no se recalculan. Hoy no importa (es un lab), pero hay que decirlo antes de que
+  alguien lo toque en una corrida larga.
 
 ## Slices posteriores
 

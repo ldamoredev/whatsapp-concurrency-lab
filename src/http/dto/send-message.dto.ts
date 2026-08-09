@@ -127,3 +127,34 @@ export function parseResyncBody(raw: unknown): ResyncBody {
 
   return { fromClientSequence: value };
 }
+
+export interface AckBody {
+  deviceId: string;
+  state: 'delivered' | 'read';
+}
+
+export function parseAckBody(raw: unknown): AckBody {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+    fail(['el body debe ser un objeto JSON']);
+  }
+
+  const input = raw as Record<string, unknown>;
+  const errors: string[] = [];
+
+  const deviceId = input.deviceId;
+  if (typeof deviceId !== 'string' || !UUID_PATTERN.test(deviceId)) {
+    errors.push('deviceId debe ser un UUID valido');
+  }
+
+  // `pending` no se ackea: es el estado inicial. Aceptarlo seria pedir un retroceso.
+  const state = input.state;
+  if (state !== 'delivered' && state !== 'read') {
+    errors.push("state debe ser 'delivered' o 'read'");
+  }
+
+  if (errors.length > 0) {
+    fail(errors);
+  }
+
+  return { deviceId: deviceId as string, state: state as 'delivered' | 'read' };
+}

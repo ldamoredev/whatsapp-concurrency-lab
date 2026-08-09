@@ -158,7 +158,7 @@ describe('POST .../stream/resync — el contrato explícito', () => {
     });
     const payload = (await response.json()) as Record<string, unknown>;
 
-    expect(response.status).toBe(201);
+    expect(response.status).toBe(200);
     expect(payload.state).toBe('ok');
     expect(payload.nextClientSequence).toBe(5);
 

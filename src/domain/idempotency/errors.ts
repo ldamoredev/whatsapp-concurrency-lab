@@ -154,3 +154,24 @@ export class StreamNotFoundError extends DomainError {
     super(`No hay stream registrado para el dispositivo ${deviceId} en ${conversationId}.`);
   }
 }
+
+/**
+ * El dispositivo no esta en el snapshot de entrega de ese mensaje.
+ *
+ * "Un dispositivo fuera del snapshot no cambia el batch": no se crea el recibo, no se
+ * mueve el conteo. El snapshot se congelo al publicar y es inmutable — si aceptaramos
+ * acks de dispositivos agregados despues, `expected_count` dejaria de significar algo
+ * y el cleanup no podria decidir nunca.
+ */
+export class DeviceNotInSnapshotError extends DomainError {
+  readonly code = 'DEVICE_NOT_IN_SNAPSHOT';
+
+  constructor(
+    readonly messageId: string,
+    readonly deviceId: string,
+  ) {
+    super(
+      `El dispositivo ${deviceId} no forma parte del snapshot de entrega del mensaje ${messageId}.`,
+    );
+  }
+}
