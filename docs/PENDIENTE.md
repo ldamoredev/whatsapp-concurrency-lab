@@ -53,15 +53,41 @@ Cerrado el 9 de agosto de 2026. Ver
   viejo no se recalculan. Hoy no importa (es un lab), pero hay que decirlo antes de que
   alguien lo toque en una corrida larga.
 
-## Slices posteriores
+## ~~S5 — contenedor, salud y métricas~~ ✅ hecho
 
-- Health `startup`/`readiness`/`liveness` y `/metrics`. **No existen todavía.**
-- Docker multi-stage no-root, k3d multi-node, Traefik, 3 pods, PDB, probes, spread.
+Cerrado el 9 de agosto de 2026. Quedó afuera y sigue pendiente:
+
+- **No hay balanceador.** Las tres réplicas exponen puertos distintos y el round-robin lo
+  hace el cliente. Traefik llega con k3d; hasta entonces no se puede afirmar nada sobre
+  reparto real ni sobre ausencia de sticky sessions.
+- **`readOnlyRootFilesystem`** no se puede probar con Compose. Va en el `securityContext`
+  del Deployment, con un `emptyDir` en `/tmp`.
+- **Las métricas de negocio están definidas pero no se incrementan todavía.**
+  `lab_idempotency_outcomes_total`, `lab_ack_transitions_total` y compañía existen en el
+  registry; falta llamarlas desde los servicios. Se hace junto con el panel, que las
+  consume.
+- **No hay logs JSON estructurados** con `requestId`, `operationId`, `messageId` e
+  `instanceId`. Hoy sólo hay un `console.error` en el filtro de errores.
+
+## S6 — el panel
+
+Página servida por la propia API, sin framework ni build step. Muestra qué réplica atendió
+cada request, dispara las carreras (100 requests con la misma key, 1-3-4-2, acks
+concurrentes) y muestra la base en vivo. Estética de herramienta de observabilidad.
+
+## S7 — Kubernetes
+
+- k3d multi-node, Traefik, `Deployment` ×3, `Service`, `Ingress`.
+- `StatefulSet` de PostgreSQL con PVC, `Job` de migraciones, los dos `CronJob`
+  (`gaps:expire` y `deliveries:cleanup`).
+- `ConfigMap`/`Secret`, requests/limits, las tres probes, PDB `minAvailable: 2`, topology
+  spread, security context no-root, `NetworkPolicy` si el CNI la soporta.
+
+## S8 — fallos, carga y evidencia
+
 - Toxiproxy entre API y Postgres, k6 desde fuera del cluster.
-- Prometheus + Grafana. Nunca IDs ni keys como labels.
-- Logs JSON estructurados con `requestId`, `operationId`, `messageId`, `instanceId`. Hoy sólo
-  hay un `console.error` en el filtro de errores.
-- `evidence/RESULTS.md`.
+- Prometheus + Grafana como código. Nunca IDs ni keys como labels.
+- Pod kill durante carga (I11), `evidence/RESULTS.md`.
 
 ## Deudas concretas abiertas
 

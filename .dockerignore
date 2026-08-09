@@ -1,0 +1,16 @@
+node_modules
+dist
+coverage
+test
+.git
+.github
+.idea
+.vscode
+*.tsbuildinfo
+.env
+.env.local
+.DS_Store
+docs
+evidence
+infra/k3d
+infra/k8s

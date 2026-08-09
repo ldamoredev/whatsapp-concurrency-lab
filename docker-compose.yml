@@ -31,5 +31,89 @@ services:
       retries: 30
       start_period: 5s
 
+  # Job de migraciones, separado del arranque de las replicas.
+  #
+  # Tres replicas migrando al arrancar es exactamente la carrera que no queremos: el
+  # runner toma un advisory lock y sobreviviria, pero el arranque quedaria serializado
+  # y un fallo de migracion se veria como "los pods no levantan". En Kubernetes esto
+  # es un Job; aca es un servicio que corre una vez y termina.
+  migrate:
+    build:
+      context: .
+      target: runtime
+    image: whatsapp-concurrency-lab:dev
+    container_name: whatsapp-lab-migrate
+    environment:
+      DATABASE_URL: postgres://lab:lab@postgres:5432/whatsapp_lab
+    command: ['node', 'dist/scripts/migrate.js']
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: 'no'
+
+  # Tres replicas de la API con la MISMA imagen y distinto INSTANCE_ID.
+  #
+  # No hay balanceador delante: el alcance prohibe agregar Nginx, y Traefik llega con
+  # k3d. Mientras tanto cada replica expone su propio puerto y el panel hace el
+  # round-robin del lado del cliente. Es un sustituto explicito y temporal: en el
+  # cluster el reparto lo hace Traefik sin sticky sessions.
+  api-1:
+    build:
+      context: .
+      target: runtime
+    image: whatsapp-concurrency-lab:dev
+    container_name: whatsapp-lab-api-1
+    environment: &api-env
+      DATABASE_URL: postgres://lab:lab@postgres:5432/whatsapp_lab
+      DATABASE_POOL_MAX: '10'
+      PORT: '3000'
+      DRAIN_DELAY_MS: '3000'
+      INSTANCE_ID: api-1
+    ports: ['3001:3000']
+    depends_on:
+      postgres: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+    healthcheck: &api-health
+      test: ['CMD', 'node', '-e', "fetch('http://127.0.0.1:3000/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+    # El drenaje necesita su tiempo: si Docker mata el contenedor antes, el apagado
+    # ordenado no se puede demostrar.
+    stop_grace_period: 15s
+
+  api-2:
+    build:
+      context: .
+      target: runtime
+    image: whatsapp-concurrency-lab:dev
+    container_name: whatsapp-lab-api-2
+    environment:
+      <<: *api-env
+      INSTANCE_ID: api-2
+    ports: ['3002:3000']
+    depends_on:
+      postgres: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+    healthcheck: *api-health
+    stop_grace_period: 15s
+
+  api-3:
+    build:
+      context: .
+      target: runtime
+    image: whatsapp-concurrency-lab:dev
+    container_name: whatsapp-lab-api-3
+    environment:
+      <<: *api-env
+      INSTANCE_ID: api-3
+    ports: ['3003:3000']
+    depends_on:
+      postgres: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+    healthcheck: *api-health
+    stop_grace_period: 15s
+
 volumes:
   postgres-data:

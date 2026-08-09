@@ -1,9 +1,9 @@
-import { join } from 'node:path';
 import { testDatabaseOptions } from '../../src/infrastructure/database/config';
 import { createPool } from '../../src/infrastructure/database/database';
+import { resolveMigrationsDir } from '../../src/infrastructure/database/migrations-path';
 import { migrate } from '../../src/infrastructure/database/migrator';
 
-const MIGRATIONS_DIR = join(__dirname, '..', '..', 'migrations');
+const MIGRATIONS_DIR = resolveMigrationsDir(__dirname);
 
 /**
  * Migra la base de tests una sola vez, antes de todo.

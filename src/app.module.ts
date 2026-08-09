@@ -6,6 +6,8 @@ import { ExpireGapsService } from './application/expire-gaps.service';
 import { SendMessageService } from './application/send-message.service';
 import { DatabaseModule, PG_POOL } from './infrastructure/database/database.module';
 import { AcksController } from './http/acks.controller';
+import { HealthController } from './http/health.controller';
+import { MetricsController } from './http/metrics.controller';
 import { MessagesController } from './http/messages.controller';
 import { StreamsController } from './http/streams.controller';
 
@@ -18,13 +20,19 @@ function readInt(name: string, fallback: number): number {
 }
 
 /**
- * Slice 4: envio idempotente, orden por conversacion y entrega multi-dispositivo.
+ * Slice 5: el dominio completo, mas salud, identidad de replica y metricas.
  *
- * Todavia no hay health/metrics ni observabilidad: llegan con Kubernetes.
+ * Falta el panel (S6), Kubernetes (S7) y la carga con fallos (S8).
  */
 @Module({
   imports: [DatabaseModule],
-  controllers: [MessagesController, StreamsController, AcksController],
+  controllers: [
+    MessagesController,
+    StreamsController,
+    AcksController,
+    HealthController,
+    MetricsController,
+  ],
   providers: [
     {
       provide: SendMessageService,

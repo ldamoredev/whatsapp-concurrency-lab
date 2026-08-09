@@ -1,9 +1,9 @@
-import { join } from 'node:path';
 import { afterAll, afterEach, describe, expect, it } from 'vitest';
+import { resolveMigrationsDir } from '../../src/infrastructure/database/migrations-path';
 import { migrate } from '../../src/infrastructure/database/migrator';
 import { closeTestPool, testPool } from './helpers/database';
 
-const MIGRATIONS_DIR = join(__dirname, '..', '..', 'migrations');
+const MIGRATIONS_DIR = resolveMigrationsDir(__dirname);
 
 afterAll(async () => {
   await closeTestPool();

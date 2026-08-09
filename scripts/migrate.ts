@@ -8,12 +8,12 @@
  * En Kubernetes esto corre como Job, separado del arranque de cada pod: tres replicas
  * migrando al arrancar es exactamente la carrera que no queremos.
  */
-import { join } from 'node:path';
 import { databaseOptions, testDatabaseOptions } from '../src/infrastructure/database/config';
 import { createPool } from '../src/infrastructure/database/database';
+import { resolveMigrationsDir } from '../src/infrastructure/database/migrations-path';
 import { getAppliedMigrations, loadMigrations, migrate } from '../src/infrastructure/database/migrator';
 
-const MIGRATIONS_DIR = join(__dirname, '..', 'migrations');
+const MIGRATIONS_DIR = resolveMigrationsDir();
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);

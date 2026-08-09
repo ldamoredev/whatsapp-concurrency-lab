@@ -1,9 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { NestFactory } from '@nestjs/core';
-import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
+import type { NestFastifyApplication } from '@nestjs/platform-fastify';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { AppModule } from '../../src/app.module';
-import { DomainErrorFilter } from '../../src/http/domain-error.filter';
+import { createApp } from '../../src/bootstrap';
 import { testDatabaseOptions } from '../../src/infrastructure/database/config';
 import { closeTestPool, countRows, testPool, truncateAll } from '../integration/helpers/database';
 import {
@@ -19,10 +17,9 @@ let messageId: string;
 beforeAll(async () => {
   process.env.DATABASE_URL = testDatabaseOptions().connectionString;
 
-  app = await NestFactory.create<NestFastifyApplication>(AppModule, new FastifyAdapter(), {
-    logger: false,
-  });
-  app.useGlobalFilters(new DomainErrorFilter());
+  // La MISMA construccion que usa el server: si los e2e armaran la app a su manera,
+  // estarian probando una aplicacion que no es la que corre en produccion.
+  app = await createApp({ logger: false });
   await app.listen({ port: 0, host: '127.0.0.1' });
   baseUrl = await app.getUrl();
 }, 60_000);

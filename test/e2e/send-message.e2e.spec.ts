@@ -1,9 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { NestFactory } from '@nestjs/core';
-import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
+import type { NestFastifyApplication } from '@nestjs/platform-fastify';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { AppModule } from '../../src/app.module';
-import { DomainErrorFilter } from '../../src/http/domain-error.filter';
+import { createApp } from '../../src/bootstrap';
 import { testDatabaseOptions } from '../../src/infrastructure/database/config';
 import { closeTestPool, countRows, truncateAll } from '../integration/helpers/database';
 import { createConversationWithDevices, type ConversationFixture } from '../integration/helpers/fixtures';
@@ -23,10 +21,9 @@ beforeAll(async () => {
   // La app tiene que hablar con la base de TESTS, no con la de desarrollo.
   process.env.DATABASE_URL = testDatabaseOptions().connectionString;
 
-  app = await NestFactory.create<NestFastifyApplication>(AppModule, new FastifyAdapter(), {
-    logger: false,
-  });
-  app.useGlobalFilters(new DomainErrorFilter());
+  // La MISMA construccion que usa el server: si los e2e armaran la app a su manera,
+  // estarian probando una aplicacion que no es la que corre en produccion.
+  app = await createApp({ logger: false });
 
   // Puerto 0: el sistema operativo elige uno libre y evita chocar con la app local.
   await app.listen({ port: 0, host: '127.0.0.1' });

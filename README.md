@@ -7,7 +7,7 @@ vocabulario con el que se hacen visibles esas carreras.
 El alcance completo del proyecto está en [`docs/ALCANCE.md`](docs/ALCANCE.md). Ese archivo
 manda y no se edita desde acá.
 
-## Estado: los cuatro slices de dominio, completos
+## Estado: dominio completo + contenedor, salud y métricas
 
 Lo que existe hoy:
 
@@ -19,12 +19,65 @@ Lo que existe hoy:
   vencido bloquea el stream y exige un resync explícito del cliente.
 - **Entrega multi-dispositivo**: acks monotónicos e idempotentes, progreso atado al cambio
   real de estado, y cleanup de envelopes que ocurre una sola vez — con la razón declarada.
-- **158 tests**: unit, integración contra PostgreSQL real y e2e HTTP, incluidos C1 (100
+- **Imagen Docker multi-stage no-root**, tres réplicas de la API con Docker Compose y un
+  Job de migraciones separado del arranque.
+- **Salud, identidad y métricas**: las tres probes con responsabilidades distintas,
+  `X-Instance-Id` en cada respuesta, `/metrics` en formato Prometheus y apagado ordenado
+  probado (no-ready → drenar → cerrar pool).
+- **165 tests**: unit, integración contra PostgreSQL real y e2e HTTP, incluidos C1 (100
   requests concurrentes), C2 (respuesta perdida post-commit), C3 (1, 3, 4 → 2 y el hueco
   que vence) y C4 (acks duplicados, fuera de orden y concurrentes con el CronJob).
 
-Lo que **no** existe todavía: Kubernetes, k6, Toxiproxy, Prometheus, health y métricas.
+Lo que **no** existe todavía: el panel web, Kubernetes, k6, Toxiproxy y Grafana.
 Ver [`docs/PENDIENTE.md`](docs/PENDIENTE.md).
+
+## Tres réplicas en un comando
+
+```bash
+npm run stack:up
+```
+
+Levanta PostgreSQL, corre las migraciones como job separado y arranca **tres réplicas** de
+la API en `:3001`, `:3002` y `:3003`. Después:
+
+```bash
+npm run demo:replicas
+```
+
+Manda las mismas carreras contra los tres procesos. Salida real de una corrida:
+
+```text
+→ api-1  201 creado   messageId c798530e
+→ api-2  200 replay   messageId c798530e
+→ api-3  200 replay   messageId c798530e
+
+90 requests concurrentes → 201 creado: 1 · 200 replay: 60 · 409 en curso: 29
+reparto:  api-1 ██ 30   api-2 ██ 30   api-3 ██ 30
+base:     mensajes 2   batches 2   envelopes 6
+```
+
+Tres procesos con memorias separadas, una sola autoridad: PostgreSQL. Es el punto entero
+del laboratorio.
+
+> **Nota honesta:** no hay balanceador todavía — el alcance prohíbe agregar Nginx y Traefik
+> llega con k3d. Cada réplica expone su puerto y el round-robin lo hace el cliente. Es un
+> sustituto explícito y temporal.
+
+## Salud y métricas
+
+| Probe | Qué contesta | Toca la base |
+|---|---|---|
+| `GET /health/startup` | ¿terminó de arrancar? | **sí**, una vez |
+| `GET /health/live` | ¿el proceso puede progresar? | **no** |
+| `GET /health/ready` | ¿puedo aceptar trabajo ahora? | **no** |
+
+Que `live` y `ready` **no** consulten Postgres es deliberado: durante una degradación
+compartida, un liveness que la chequeara haría que Kubernetes reinicie las tres réplicas a
+la vez por un problema que ningún reinicio arregla.
+
+`GET /metrics` expone formato Prometheus con `instance` como label. **Ningún ID va como
+label** — la ruta se reporta con parámetros (`/v1/messages/:messageId`), nunca la URL
+concreta, o cada UUID crearía una serie temporal nueva.
 
 ## La API
 
@@ -104,7 +157,11 @@ npm run demo:huecos
 npm run demo:entrega
 ```
 
-Tres demos narradas que levantan la API, mandan requests HTTP reales y muestran el estado de
+```bash
+npm run demo:replicas
+```
+
+Cuatro demos narradas que levantan la API, mandan requests HTTP reales y muestran el estado de
 cada tabla después de cada paso: el contrato de idempotencia, la política de huecos
 (1, 3, 4 → 2, el hueco que vence y el resync) y la entrega multi-dispositivo (acks
 duplicados y fuera de orden, con el CronJob corriendo en paralelo).
@@ -141,7 +198,10 @@ Credenciales del laboratorio: `lab` / `lab`, base `whatsapp_lab`.
 | `npm run gaps:expire` | barre los huecos vencidos (el futuro CronJob) |
 | `npm run deliveries:cleanup` | libera el trabajo de entrega terminado o vencido, y verifica I9 |
 | `npm run db:down` | baja el contenedor conservando los datos |
-| `npm run build` / `npm start` | compila y arranca la API (hoy sin rutas) |
+| `npm run build` / `npm start` | compila y arranca una sola instancia |
+| `npm run stack:up` | construye la imagen y levanta Postgres + 3 réplicas |
+| `npm run stack:down` | baja el stack |
+| `npm run stack:logs` | sigue los logs de las tres réplicas |
 
 ## Correr los tests
 
@@ -175,7 +235,7 @@ contra Postgres.
 | `test/integration/send-message.spec.ts` | contrato de idempotencia, lease, fencing, **C1**, **C2** |
 | `test/integration/order-and-gaps.spec.ts` | buffering, drenado, expiración y resync: **C3** |
 | `test/integration/acks-and-cleanup.spec.ts` | monotonía, conteo, cleanup único y TTL: **C4** |
-| `test/e2e/` | HTTP real: status, headers, códigos de error, C1 sobre el endpoint |
+| `test/e2e/` | HTTP real: status, headers, códigos de error, probes, métricas |
 
 ## Cómo están escritos los tests
 

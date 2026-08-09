@@ -9,7 +9,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "start": "node dist/main.js",
+    "start": "node dist/src/main.js",
     "start:dev": "tsx watch src/main.ts",
     "db:up": "docker compose up -d --wait postgres",
     "db:down": "docker compose down",
@@ -25,7 +25,11 @@
     "gaps:expire": "tsx scripts/expire-gaps.ts",
     "demo:huecos": "tsx scripts/demo-orden-y-huecos.ts",
     "deliveries:cleanup": "tsx scripts/cleanup-deliveries.ts",
-    "demo:entrega": "tsx scripts/demo-entrega.ts"
+    "demo:entrega": "tsx scripts/demo-entrega.ts",
+    "stack:up": "docker compose up -d --build --wait",
+    "stack:down": "docker compose down",
+    "stack:logs": "docker compose logs -f api-1 api-2 api-3",
+    "demo:replicas": "tsx scripts/demo-replicas.ts"
   },
   "dependencies": {
     "@nestjs/common": "^11.1.6",
@@ -33,6 +37,7 @@
     "@nestjs/platform-fastify": "^11.1.6",
     "dotenv": "^17.2.3",
     "pg": "^8.16.3",
+    "prom-client": "^15.1.3",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2"
   },

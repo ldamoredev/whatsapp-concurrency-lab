@@ -1,5 +1,10 @@
 {
   "extends": "./tsconfig.json",
-  "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist", "test", "scripts", "**/*.spec.ts"]
+  "compilerOptions": {
+    // Sin rootDir explicito, tsc lo infiere del directorio comun de los `include`:
+    // la raiz del proyecto. Por eso la salida queda en dist/src y dist/scripts.
+    "rootDir": "."
+  },
+  "include": ["src/**/*", "scripts/migrate.ts", "scripts/expire-gaps.ts", "scripts/cleanup-deliveries.ts"],
+  "exclude": ["node_modules", "dist", "test", "scripts/demo-*.ts", "**/*.spec.ts"]
 }
