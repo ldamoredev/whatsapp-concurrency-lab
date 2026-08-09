@@ -1,8 +1,10 @@
 import { Module } from '@nestjs/common';
 import type { Pool } from 'pg';
+import { ExpireGapsService } from './application/expire-gaps.service';
 import { SendMessageService } from './application/send-message.service';
 import { DatabaseModule, PG_POOL } from './infrastructure/database/database.module';
 import { MessagesController } from './http/messages.controller';
+import { StreamsController } from './http/streams.controller';
 
 function readInt(name: string, fallback: number): number {
   const raw = process.env[name];
@@ -13,14 +15,14 @@ function readInt(name: string, fallback: number): number {
 }
 
 /**
- * Slice 2: envio idempotente.
+ * Slice 3: envio idempotente con orden por conversacion y politica de huecos.
  *
- * Todavia no hay acks ni politica de huecos (slices 3 y 4), ni health/metrics
+ * Todavia no hay acks ni cleanup de envelopes (slice 4), ni health/metrics
  * (llegan con Kubernetes).
  */
 @Module({
   imports: [DatabaseModule],
-  controllers: [MessagesController],
+  controllers: [MessagesController, StreamsController],
   providers: [
     {
       provide: SendMessageService,
@@ -31,9 +33,11 @@ function readInt(name: string, fallback: number): number {
         new SendMessageService(pool, {
           leaseMs: readInt('IDEMPOTENCY_LEASE_MS', 30_000),
           ttlMs: readInt('IDEMPOTENCY_TTL_MS', 24 * 60 * 60 * 1000),
+          gapTimeoutMs: readInt('GAP_TIMEOUT_MS', 30_000),
         }),
       inject: [PG_POOL],
     },
+    ExpireGapsService,
   ],
 })
 export class AppModule {}

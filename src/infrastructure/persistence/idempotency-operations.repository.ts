@@ -25,6 +25,7 @@ interface OperationRow {
   response_status: number | null;
   response_body: unknown;
   lease_until: Date | null;
+  lease_is_alive: boolean;
   expires_at: Date;
 }
 
@@ -42,13 +43,15 @@ function toOperation(row: OperationRow): IdempotencyOperation {
     responseStatus: row.response_status,
     responseBody: row.response_body,
     leaseUntil: row.lease_until,
+    leaseIsAlive: row.lease_is_alive,
     expiresAt: row.expires_at,
   };
 }
 
 const SELECT_COLUMNS = `
   id, actor_id, route, key, fingerprint, status, recovery_point,
-  attempt, resource_id, response_status, response_body, lease_until, expires_at
+  attempt, resource_id, response_status, response_body, lease_until, expires_at,
+  (lease_until IS NOT NULL AND lease_until > now()) AS lease_is_alive
 `;
 
 export interface ClaimInput {

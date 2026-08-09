@@ -1,4 +1,4 @@
-# Pendiente — anotado durante los slices 1 y 2
+# Pendiente — anotado durante los slices 1, 2 y 3
 
 Cosas que aparecieron mientras se escribía y que **no** entran todavía. Se anotan acá para
 no perderlas y para no meterlas antes de tiempo.
@@ -18,21 +18,24 @@ Quedó afuera del slice y sigue pendiente:
   encuentra el resultado del owner nuevo) pero quizás `503 + Retry-After` describa mejor
   "esto fue transitorio y no fue tu culpa". Decidir con datos de L1, no por intuición.
 
-## Slice 3 — orden y huecos
+## ~~Slice 3 — orden y huecos~~ ✅ hecho
 
-- Validar `clientSequence` contra `device_sequences.next_client_sequence` antes de publicar.
-  **Hoy no se valida**: el mensaje se publica directo asumiendo que no hay huecos. Esa es la
-  diferencia principal entre el estado actual y S3.
-- Mensajes `buffered`: llega una secuencia mayor a la esperada → no recibe `server_sequence`
-  ni genera deliveries. El schema ya lo soporta (`messages_published_iff_server_sequence`).
-- Drenado de contiguos al llegar el que faltaba: con 1,3,4 y luego 2, publicar 2,3,4 en orden.
-- Vencimiento del `gap_deadline` → `resync_required`. Necesita worker; el índice parcial
-  `device_sequences_gap_deadline_idx` ya está para que el barrido sea barato.
-- Contrato explícito de resync: endpoint que devuelve el próximo `client_sequence` esperado.
-- **Medir lock vs. optimista.** Hoy el orden se asigna con `SELECT ... FOR UPDATE` sobre
+Cerrado el 8 de agosto de 2026. Ver
+[ADR 0002](adr/0002-orden-antes-que-disponibilidad.md). Quedó afuera y sigue pendiente:
+
+- **El barrido de huecos no corre solo.** `npm run gaps:expire` existe y es el cuerpo exacto
+  del futuro CronJob, pero hoy hay que invocarlo a mano. Sin él, un stream con un hueco
+  queda en `waiting_gap` para siempre.
+- **Medir lock vs. optimista.** El orden se asigna con `SELECT ... FOR UPDATE` sobre
   `conversation_sequences`. La columna `version` existe para poder comparar con un
   compare-and-set con reintento. No elegir sin medir: L1 tiene que decir cuál gana en una
   conversación caliente.
+- **El drenado en cascada publica de a uno** dentro de la transacción que tiene tomado el
+  lock del contador de la conversación. Con cientos de mensajes bufferizados esa transacción
+  se estira y bloquea al resto de la conversación. Medir en L1 antes de optimizar.
+- **`gapTimeoutMs` es un número inventado** (30 s por defecto). El valor correcto sale de
+  medir cuántos `resync_required` produce en la práctica.
+- Falta métrica de gaps activos y su edad, y de transiciones a `resync_required`.
 
 ## Slice 4 — multi-device
 
@@ -60,6 +63,11 @@ Quedó afuera del slice y sigue pendiente:
 
 - **El pool está fijo en 10 conexiones** y C1 lanza 100 requests concurrentes contra él. Hoy
   pasa, pero el número correcto sale de L1/L3, no de una intuición.
+- **Ningún reloj de la aplicación decide nada, y hay que mantenerlo así.** Un bug del slice 3
+  comparaba `lease_until` (escrito por Postgres) contra `new Date()` de Node; se manifestó
+  como un test intermitente. Toda comparación temporal va en SQL. Hay un test de regresión
+  (`la vigencia del lease la decide PostgreSQL`), pero no hay nada que lo impida
+  automáticamente en código nuevo.
 - `conversation_devices.removed_at` ya se usa para excluir bajas del snapshot
   (`snapshotRecipients`), pero **nada lo escribe**: no hay endpoint para dar de baja un
   dispositivo. Cuando lo haya, decidir qué pasa con los batches ya congelados (probablemente

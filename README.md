@@ -7,21 +7,23 @@ vocabulario con el que se hacen visibles esas carreras.
 El alcance completo del proyecto está en [`docs/ALCANCE.md`](docs/ALCANCE.md). Ese archivo
 manda y no se edita desde acá.
 
-## Estado: slice 2 de 4 — envío idempotente
+## Estado: slice 3 de 4 — orden por conversación y huecos
 
 Lo que existe hoy:
 
 - Node LTS + TypeScript + NestJS con Fastify, PostgreSQL 16 en Docker Compose.
 - Migraciones SQL versionadas con las 10 tablas del modelo mínimo y sus constraints.
-- **`POST /v1/conversations/:id/messages` idempotente**: publica el mensaje, asigna el
-  orden visible con `FOR UPDATE` y crea el snapshot de entrega, todo en un solo commit.
-- Lease + fencing por `attempt` para operaciones abandonadas.
-- **104 tests**: unit del fingerprint, integración contra PostgreSQL real y e2e HTTP,
-  incluidos C1 (100 requests concurrentes) y C2 (respuesta perdida post-commit).
+- **Envío idempotente**: lease + fencing por `attempt`, respuesta reproducible, replay.
+- **Orden por conversación con política de huecos**: los mensajes adelantados quedan
+  `buffered` sin orden visible ni deliveries; al llegar el que falta se publican todos en
+  cascada, en un solo commit. Un hueco vencido bloquea el stream y exige un resync
+  explícito del cliente.
+- **129 tests**: unit, integración contra PostgreSQL real y e2e HTTP, incluidos C1 (100
+  requests concurrentes), C2 (respuesta perdida post-commit) y C3 (1, 3, 4 → 2, más el
+  hueco que vence).
 
-Lo que **no** existe todavía, a propósito: política de huecos y `resync_required` (S3),
-acks y cleanup (S4), Kubernetes, k6, Toxiproxy, Prometheus. Ver
-[`docs/PENDIENTE.md`](docs/PENDIENTE.md).
+Lo que **no** existe todavía, a propósito: acks y cleanup de envelopes (S4), Kubernetes,
+k6, Toxiproxy, Prometheus. Ver [`docs/PENDIENTE.md`](docs/PENDIENTE.md).
 
 ## La API
 
@@ -41,21 +43,48 @@ Header obligatorio `Idempotency-Key`. Body:
 
 | Situación | Respuesta |
 |---|---|
-| primera ejecución | `201` + el mensaje creado |
+| primera ejecución, y es el `clientSequence` esperado | `201` + el mensaje publicado |
+| llegó adelantado: falta uno anterior | `202` + el mensaje `buffered`, sin orden visible |
 | misma key, mismo pedido, ya completado | `200` + **el mismo** `messageId` (I3) |
 | misma key, otro pedido | `409 IDEMPOTENCY_KEY_REUSED`, sin ejecutar nada (I2) |
 | misma key, mismo pedido, en curso | `409 IDEMPOTENCY_IN_PROGRESS` + `Retry-After` |
 | esa posición del stream está tomada por otro mensaje | `409 CLIENT_SEQUENCE_CONFLICT` (I4) |
+| el hueco venció y el stream está bloqueado | `409 STREAM_RESYNC_REQUIRED` + `nextClientSequence` |
 | conversación inexistente o dispositivo no miembro | `404 SENDER_NOT_IN_CONVERSATION` |
+
+Cuando llega el mensaje que faltaba, la respuesta trae `drained`: cuántos mensajes
+bufferizados se publicaron en cascada junto con él.
 
 La respuesta lleva `X-Idempotent-Replay: true|false` — sólo para el laboratorio, para poder
 ver por qué camino salió.
+
+### `GET|POST /v1/conversations/:id/devices/:id/stream`
+
+El contrato explícito de resincronización. `GET` devuelve el próximo `clientSequence`
+esperado, el estado del stream (`ok` · `waiting_gap` · `resync_required`) y el deadline del
+hueco. `POST .../stream/resync` con `{ "fromClientSequence": N }` es la **única** forma de
+saltar un hueco, y la decide el cliente — nunca el servidor. Ver
+[ADR 0002](docs/adr/0002-orden-antes-que-disponibilidad.md).
 
 ### `GET /v1/messages/:messageId` y `GET /v1/operations/:key`
 
 Consulta para recovery y para verificar invariantes. `GET /v1/operations/:key` requiere el
 header `X-Actor-Id` y devuelve la respuesta persistida: **un cliente que perdió la respuesta
 puede recuperarla sin reenviar el efecto**.
+
+### Verlo funcionar
+
+```bash
+npm run demo
+```
+
+```bash
+npm run demo:huecos
+```
+
+Dos demos narradas que levantan la API, mandan requests HTTP reales y muestran el estado de
+cada tabla después de cada paso. La primera recorre el contrato de idempotencia; la segunda,
+la política de huecos (1, 3, 4 → 2, el hueco que vence y el resync).
 
 ### El contrato en cuatro comandos
 
@@ -86,6 +115,7 @@ Credenciales del laboratorio: `lab` / `lab`, base `whatsapp_lab`.
 | `npm run migrate` | aplica las migraciones pendientes |
 | `npm run migrate:status` | muestra qué está aplicado y qué falta |
 | `npm run db:reset` | **borra el volumen** y vuelve a levantar limpio |
+| `npm run gaps:expire` | barre los huecos vencidos (el futuro CronJob) |
 | `npm run db:down` | baja el contenedor conservando los datos |
 | `npm run build` / `npm start` | compila y arranca la API (hoy sin rutas) |
 
@@ -119,6 +149,7 @@ contra Postgres.
 | `test/unit/` | fingerprint canónico: estabilidad, colisiones, tipos |
 | `test/integration/*.constraints.spec.ts` | cada constraint del schema, probada por violación |
 | `test/integration/send-message.spec.ts` | contrato de idempotencia, lease, fencing, **C1**, **C2** |
+| `test/integration/order-and-gaps.spec.ts` | buffering, drenado, expiración y resync: **C3** |
 | `test/e2e/` | HTTP real: status, headers, códigos de error, C1 sobre el endpoint |
 
 ## Cómo están escritos los tests
@@ -196,7 +227,7 @@ Cada constraint lleva en la migración un comentario con la carrera concreta que
 | **I3** un retry completado devuelve el mismo resultado | `idempotency_operations_completed_has_response` | [0002](migrations/0002_idempotency_operations.sql) |
 | **I4** un stream no repite `client_sequence` | `messages_stream_client_sequence_uniq` UNIQUE (conversation_id, sender_device_id, client_sequence) | [0003](migrations/0003_messages.sql) |
 | **I5** `server_sequence` única por conversación | `messages_conversation_server_sequence_uniq` UNIQUE (conversation_id, server_sequence) **WHERE server_sequence IS NOT NULL** | [0003](migrations/0003_messages.sql) |
-| **I6** un mensaje con hueco no se vuelve visible | `messages_published_iff_server_sequence` | [0003](migrations/0003_messages.sql) |
+| **I6** un mensaje con hueco no se vuelve visible | `messages_published_iff_server_sequence` + política de huecos | [0003](migrations/0003_messages.sql) |
 | **I7** un receipt nunca retrocede | `delivery_receipts_pkey` + `delivery_receipts_state_matches_timestamps` + `version` | [0004](migrations/0004_delivery.sql) |
 | **I8** un ack duplicado no cuenta dos veces | `delivery_envelopes_message_device_uniq`, `delivery_batches_delivered_not_above_expected` | [0004](migrations/0004_delivery.sql) |
 | **I9** no hay cleanup con dispositivos pendientes | `delivery_batches_cleanup_requires_completion` | [0004](migrations/0004_delivery.sql) |
@@ -228,6 +259,11 @@ lancen a la vez — y rechaza una migración ya aplicada que fue editada.
 **Aislamiento por caso, no global.** El default es `READ COMMITTED` con constraints y locks
 explícitos. Subir el aislamiento global sin medir sería tapar el problema en vez de
 resolverlo. Cada decisión se documenta donde se toma.
+
+**Ante un hueco, se preserva el orden y se sacrifica disponibilidad de ese dispositivo.**
+Un mensaje adelantado espera; si el hueco vence, el stream se bloquea y el cliente decide.
+El servidor nunca publica salteando un hueco:
+[ADR 0002](docs/adr/0002-orden-antes-que-disponibilidad.md).
 
 **Dos transacciones, no cuatro recovery points.** Tx1 reclama la idempotency key; Tx2 hace
 todo el efecto en un solo commit. Por qué eso elimina las ventanas ambiguas internas, cuál

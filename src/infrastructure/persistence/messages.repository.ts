@@ -112,17 +112,23 @@ export async function lockNextServerSequence(
   return Number.parseInt(result.rows[0].next_server_sequence, 10);
 }
 
-/** Avanza el contador. Se llama en la misma transaccion que tomo el lock. */
+/**
+ * Avanza el contador. Se llama en la misma transaccion que tomo el lock.
+ *
+ * `by` puede ser mayor que 1: al drenar un hueco se publican varios mensajes de una
+ * sola vez y el contador tiene que saltar todos juntos, bajo el mismo lock.
+ */
 export async function advanceServerSequence(
   client: PoolClient,
   conversationId: string,
+  by = 1,
 ): Promise<void> {
   await client.query(
     `UPDATE conversation_sequences
-        SET next_server_sequence = next_server_sequence + 1,
+        SET next_server_sequence = next_server_sequence + $2,
             version = version + 1
       WHERE conversation_id = $1`,
-    [conversationId],
+    [conversationId, by],
   );
 }
 
@@ -132,7 +138,8 @@ export interface InsertMessageInput {
   senderId: string;
   senderDeviceId: string;
   clientSequence: number;
-  serverSequence: number;
+  /** `null` deja el mensaje `buffered`: llegó adelantado y todavía no tiene lugar. */
+  serverSequence: number | null;
   body: string;
 }
 
@@ -142,19 +149,24 @@ export type InsertMessageResult =
   | { outcome: 'sender_not_member' };
 
 /**
- * Inserta el mensaje ya publicado.
+ * Inserta el mensaje, publicado o bufferizado según venga `serverSequence`.
+ *
+ * El estado y el orden visible se escriben en la MISMA sentencia. El CHECK
+ * `messages_published_iff_server_sequence` no admite otra cosa, y eso es I6 en su
+ * forma estática: no existe un instante en que el mensaje sea visible sin tener lugar.
  *
  * El INSERT va dentro de un SAVEPOINT: si choca contra I4 (la posicion del stream ya
  * esta tomada), la transaccion queda abortada en Postgres y no se podria seguir
  * consultando nada. El savepoint permite volver un paso atras, averiguar quien ocupa
- * esa posicion y decidir si es un replay o un conflicto, todo sin perder el lock del
- * contador que ya se tomo.
+ * esa posicion y decidir si es un replay o un conflicto, todo sin perder los locks
+ * que ya se tomaron.
  */
-export async function insertPublishedMessage(
+export async function insertMessage(
   client: PoolClient,
   input: InsertMessageInput,
 ): Promise<InsertMessageResult> {
   const id = randomUUID();
+  const status = input.serverSequence === null ? 'buffered' : 'published';
 
   await client.query('SAVEPOINT insert_message');
 
@@ -163,7 +175,7 @@ export async function insertPublishedMessage(
       `INSERT INTO messages (
          id, client_message_id, conversation_id, sender_id, sender_device_id,
          client_sequence, server_sequence, status, body
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'published', $8)
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $9, $8)
        RETURNING ${SELECT_COLUMNS}`,
       [
         id,
@@ -174,6 +186,7 @@ export async function insertPublishedMessage(
         input.clientSequence,
         input.serverSequence,
         input.body,
+        status,
       ],
     );
 
@@ -196,4 +209,69 @@ export async function insertPublishedMessage(
 
     throw error;
   }
+}
+
+/**
+ * Busca el mensaje bufferizado que ocupa exactamente esa posición del stream.
+ *
+ * Es la consulta del drenado: después de publicar el esperado, se pregunta una y otra
+ * vez "¿y el siguiente ya estaba esperando?". El índice parcial
+ * `messages_buffered_stream_idx` cubre justo este acceso.
+ */
+export async function findBufferedAt(
+  client: PoolClient,
+  conversationId: string,
+  senderDeviceId: string,
+  clientSequence: number,
+): Promise<StoredMessage | null> {
+  const result = await client.query<MessageRow>(
+    `SELECT ${SELECT_COLUMNS} FROM messages
+      WHERE conversation_id = $1
+        AND sender_device_id = $2
+        AND client_sequence = $3
+        AND status = 'buffered'`,
+    [conversationId, senderDeviceId, clientSequence],
+  );
+
+  return result.rows.length > 0 ? toMessage(result.rows[0]) : null;
+}
+
+/** ¿Queda algo bufferizado en este stream? Decide si el hueco se cerró del todo. */
+export async function hasBufferedMessages(
+  client: PoolClient,
+  conversationId: string,
+  senderDeviceId: string,
+): Promise<boolean> {
+  const result = await client.query<{ exists: boolean }>(
+    `SELECT EXISTS (
+       SELECT 1 FROM messages
+        WHERE conversation_id = $1 AND sender_device_id = $2 AND status = 'buffered'
+     ) AS exists`,
+    [conversationId, senderDeviceId],
+  );
+
+  return result.rows[0].exists;
+}
+
+/**
+ * Publica un mensaje que estaba bufferizado: le da su lugar en la conversación.
+ *
+ * El `AND status = 'buffered'` es un update condicional, no decoración: si dos
+ * drenados concurrentes intentaran publicar el mismo mensaje, el segundo actualiza 0
+ * filas en vez de reasignarle otro `server_sequence` al que ya tenía uno.
+ */
+export async function publishBufferedMessage(
+  client: PoolClient,
+  messageId: string,
+  serverSequence: number,
+): Promise<StoredMessage | null> {
+  const result = await client.query<MessageRow>(
+    `UPDATE messages
+        SET server_sequence = $2, status = 'published'
+      WHERE id = $1 AND status = 'buffered'
+      RETURNING ${SELECT_COLUMNS}`,
+    [messageId, serverSequence],
+  );
+
+  return result.rows.length > 0 ? toMessage(result.rows[0]) : null;
 }

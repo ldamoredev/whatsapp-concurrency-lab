@@ -103,3 +103,27 @@ export function parseSendMessageBody(raw: unknown): SendMessageBody {
     body: body as string,
   };
 }
+
+export interface ResyncBody {
+  fromClientSequence: number;
+}
+
+export function parseResyncBody(raw: unknown): ResyncBody {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+    fail(['el body debe ser un objeto JSON']);
+  }
+
+  const value = (raw as Record<string, unknown>).fromClientSequence;
+
+  if (typeof value !== 'number' || !Number.isInteger(value)) {
+    fail(['fromClientSequence debe ser un entero']);
+  }
+  if (value < 1) {
+    fail(['fromClientSequence debe ser >= 1']);
+  }
+  if (!Number.isSafeInteger(value)) {
+    fail(['fromClientSequence excede el rango seguro']);
+  }
+
+  return { fromClientSequence: value };
+}

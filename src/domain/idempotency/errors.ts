@@ -106,3 +106,51 @@ export class OperationNotFoundError extends DomainError {
     super(`No existe una operacion con key "${key}" para ese actor.`);
   }
 }
+
+/**
+ * El stream de ese dispositivo quedo en `resync_required`: hubo un hueco que nunca se
+ * completo dentro del deadline.
+ *
+ * NO se publica salteando el hueco. El cliente tiene que consultar el proximo
+ * client_sequence esperado y reenviarlo, o pedir un resync explicito. Esta eleccion
+ * preserva el orden y sacrifica disponibilidad para ese dispositivo: es deliberada, y
+ * esperar para siempre tampoco seria una solucion.
+ */
+export class StreamResyncRequiredError extends DomainError {
+  readonly code = 'STREAM_RESYNC_REQUIRED';
+
+  constructor(
+    readonly conversationId: string,
+    readonly deviceId: string,
+    readonly nextClientSequence: number,
+  ) {
+    super(
+      `El stream del dispositivo ${deviceId} requiere resync. El proximo client_sequence esperado es ${nextClientSequence}.`,
+    );
+  }
+}
+
+/** Un resync no puede retroceder a posiciones ya publicadas. */
+export class InvalidResyncError extends DomainError {
+  readonly code = 'INVALID_RESYNC';
+
+  constructor(
+    readonly requested: number,
+    readonly current: number,
+  ) {
+    super(
+      `No se puede resincronizar en ${requested}: el stream ya va por ${current} y las posiciones anteriores estan publicadas.`,
+    );
+  }
+}
+
+export class StreamNotFoundError extends DomainError {
+  readonly code = 'STREAM_NOT_FOUND';
+
+  constructor(
+    readonly conversationId: string,
+    readonly deviceId: string,
+  ) {
+    super(`No hay stream registrado para el dispositivo ${deviceId} en ${conversationId}.`);
+  }
+}

@@ -27,6 +27,14 @@ export interface IdempotencyOperation {
   responseStatus: number | null;
   responseBody: unknown;
   leaseUntil: Date | null;
+  /**
+   * Si el lease sigue vigente, evaluado por el reloj de PostgreSQL.
+   *
+   * NO se deriva de `leaseUntil` en la aplicacion: con tres pods hay tres relojes y
+   * tres respuestas distintas a "ya vencio?". La unica autoridad temporal del sistema
+   * es la base.
+   */
+  leaseIsAlive: boolean;
   expiresAt: Date;
 }
 

@@ -228,10 +228,10 @@ describe('envio idempotente — conflictos', () => {
 
   it('el mismo client_sequence con OTRO contenido y otra key es un conflicto (I4)', async () => {
     const svc = service();
-    await svc.send(commandFor(fixture, { clientSequence: 5, clientMessageId: 'a', body: 'uno' }));
+    await svc.send(commandFor(fixture, { clientSequence: 1, clientMessageId: 'a', body: 'uno' }));
 
     await expect(
-      svc.send(commandFor(fixture, { clientSequence: 5, clientMessageId: 'b', body: 'dos' })),
+      svc.send(commandFor(fixture, { clientSequence: 1, clientMessageId: 'b', body: 'dos' })),
     ).rejects.toBeInstanceOf(ClientSequenceConflictError);
 
     expect(await countRows('messages')).toBe(1);
@@ -241,11 +241,13 @@ describe('envio idempotente — conflictos', () => {
     // El caso real: el cliente perdio la respuesta y su retry genero otra
     // idempotency key. I1 no puede unirlos porque son operaciones distintas; el que
     // los une es I4, que ata la unicidad al dominio y no al transporte.
+    // client_sequence 1: es el esperado, asi que se publica y genera deliveries. Con
+    // un numero adelantado el mensaje quedaria buffered, que es otro caso (slice 3).
     const svc = service();
-    const first = await svc.send(commandFor(fixture, { clientSequence: 7, clientMessageId: 'x' }));
+    const first = await svc.send(commandFor(fixture, { clientSequence: 1, clientMessageId: 'x' }));
 
     const retryConKeyNueva = await svc.send(
-      commandFor(fixture, { clientSequence: 7, clientMessageId: 'x' }),
+      commandFor(fixture, { clientSequence: 1, clientMessageId: 'x' }),
     );
 
     expect(retryConKeyNueva.status).toBe(200);
@@ -304,6 +306,53 @@ describe('lease y fencing', () => {
     // attempt 2: el nuevo owner tomo el lease del anterior.
     expect(operation?.attempt).toBe(2);
     expect(operation?.status).toBe('completed');
+  });
+
+  it('la vigencia del lease la decide PostgreSQL, no el reloj de este proceso', async () => {
+    // Regresion. La version anterior comparaba `operation.leaseUntil > new Date()`:
+    // el `lease_until` lo escribe Postgres y la comparacion la hacia Node. Con un
+    // lease muy corto el test fallaba de forma intermitente, y con tres pods de
+    // relojes minimamente distintos habria dado tres respuestas para la misma
+    // operacion. Ahora el booleano viene calculado en el SELECT.
+    const command = commandFor(fixture);
+
+    await claimOperation(testPool(), {
+      actorId: command.senderId,
+      route: SEND_MESSAGE_ROUTE,
+      key: command.idempotencyKey,
+      fingerprint: (await import('../../src/domain/idempotency/fingerprint')).fingerprintOf(command),
+      leaseMs: 1,
+      ttlMs: 60_000,
+    });
+
+    const operation = await findOperation(
+      testPool(),
+      command.senderId,
+      SEND_MESSAGE_ROUTE,
+      command.idempotencyKey,
+    );
+
+    // Ya vencido segun la base, sin importar como ande el reloj de Node.
+    expect(operation?.leaseIsAlive).toBe(false);
+
+    // Y uno que reci\u00e9n se tomo, con lease largo, sigue vivo.
+    const otro = commandFor(fixture, { clientSequence: 2 });
+    await claimOperation(testPool(), {
+      actorId: otro.senderId,
+      route: SEND_MESSAGE_ROUTE,
+      key: otro.idempotencyKey,
+      fingerprint: 'fp',
+      leaseMs: 60_000,
+      ttlMs: 60_000,
+    });
+
+    const vigente = await findOperation(
+      testPool(),
+      otro.senderId,
+      SEND_MESSAGE_ROUTE,
+      otro.idempotencyKey,
+    );
+    expect(vigente?.leaseIsAlive).toBe(true);
   });
 
   it('un owner viejo NO puede completar una operacion cuyo lease ya perdio', async () => {
