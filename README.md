@@ -75,6 +75,20 @@ no hubo reparto, si se creó más de uno o si la base no quedó con un mensaje.
 > porque `kubectl port-forward svc/…` no balancea: fija un pod y se queda ahí.
 > `k8s:smoke:ingress` corre **desde el host**, por donde entraría un cliente real.
 
+**El panel también entra por el ingress**: <http://localhost:8081>. Se adapta solo — la barra
+superior muestra `ingress` o `compose` según dónde corra.
+
+| | Compose (`:3001-3003`) | Ingress (`:8081`) |
+|---|---|---|
+| URLs | una por réplica | **una sola**, relativa |
+| Reparto | lo hace el panel | lo hace **Traefik** |
+| CORS | necesario | **no hace falta** — mismo origen |
+| Réplicas | se consulta cada una | **se descubren** por su `X-Instance-Id` |
+
+Detrás del ingress no se puede preguntar pod por pod, así que el panel muestra las réplicas
+que fue viendo y cuántas respuestas dio cada una. Es más honesto: es exactamente lo que un
+cliente real puede observar. Corrida real: **76 / 77 / 74**.
+
 `npm run cluster:down` borra **únicamente** este cluster.
 
 ## El panel

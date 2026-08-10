@@ -1708,3 +1708,15 @@ button.index__item:disabled {
     gap: 10px;
   }
 }
+
+/* Indicador de despliegue: compose (una URL por réplica) o ingress (una sola). */
+.mode {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 4px 8px;
+  cursor: help;
+}

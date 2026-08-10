@@ -1,9 +1,14 @@
 import {
-  $, call, fillTable, labState, logRequest, mountTop,
+  $, MODE, call, fillTable, labState, logRequest, mountTop,
   nextReplica, pollReplicas, resetLab, setBusy, uuid,
 } from '/lib.js';
 
 mountTop({ current: '/infra' });
+
+$('#kill-note').innerHTML =
+  MODE === 'ingress'
+    ? 'Probá <code>kubectl -n whatsapp-lab delete pod &lt;alguno&gt;</code> con esta página abierta: Kubernetes lo recrea, y los escenarios siguen andando mientras tanto.'
+    : 'Probá <code>docker stop whatsapp-lab-api-2</code> con esta página abierta: la tarjeta se pone en rojo y los escenarios siguen andando con las otras dos.';
 
 let busy = false;
 

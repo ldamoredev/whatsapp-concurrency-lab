@@ -3,11 +3,22 @@
  * Sin framework y sin build step: el proyecto se explica leyendo el código, y una capa
  * de herramientas sería una capa más que explicar. */
 
-export const REPLICAS = [
-  'http://localhost:3001',
-  'http://localhost:3002',
-  'http://localhost:3003',
-];
+/**
+ * Cómo llegar a la API, según dónde esté desplegado el laboratorio.
+ *
+ *   ingress  una sola URL (el mismo origen que sirve esta página). Traefik reparte.
+ *   direct   una URL por réplica. No hay balanceador, así que reparte esta página.
+ *
+ * Se detecta por el puerto: con Docker Compose el panel se sirve desde 3001, 3002 o
+ * 3003, que son las réplicas mismas. Detrás del ingress el puerto es cualquier otro.
+ */
+const COMPOSE_PORTS = ['3001', '3002', '3003'];
+export const MODE = COMPOSE_PORTS.includes(location.port) ? 'direct' : 'ingress';
+
+// En modo ingress las URLs son relativas: mismo origen, así que tampoco hace falta
+// CORS. En modo direct hay que nombrar las tres réplicas para poder repartir.
+export const REPLICAS =
+  MODE === 'ingress' ? [''] : COMPOSE_PORTS.map((p) => `http://localhost:${p}`);
 
 export const uuid = () => crypto.randomUUID();
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -15,10 +26,11 @@ export const $ = (sel, root = document) => root.querySelector(sel);
 export const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 
 /**
- * Round-robin del lado del cliente.
+ * A dónde mandar el próximo request.
  *
- * Sustituto explícito y temporal del balanceador: Compose no trae uno y el alcance
- * prohíbe agregar Nginx. Con k3d, Traefik reparte contra una sola URL y esto se borra.
+ * En modo ingress devuelve siempre la cadena vacía: la URL queda relativa y el reparto
+ * lo hace Traefik, como con un cliente real. En modo direct hace round-robin del lado
+ * del cliente, que es un sustituto explícito del balanceador que Compose no tiene.
  */
 let cursor = 0;
 export const nextReplica = () => REPLICAS[cursor++ % REPLICAS.length];
@@ -40,10 +52,13 @@ export async function call(url, path, options = {}) {
       /* respuestas sin cuerpo */
     }
 
+    const instance = response.headers.get('x-instance-id') ?? '?';
+    observeInstance(instance);
+
     return {
       ok: response.ok,
       status: response.status,
-      instance: response.headers.get('x-instance-id') ?? '?',
+      instance,
       payload,
       ms: Math.round(performance.now() - started),
     };
@@ -98,6 +113,11 @@ export function mountTop({ current, depth = true }) {
       ).join('')}
     </nav>
     <div class="top__right">
+      <span class="mode" title="${
+        MODE === 'ingress'
+          ? 'una sola URL: el reparto lo hace Traefik'
+          : 'una URL por réplica: el reparto lo hace esta página'
+      }">${MODE === 'ingress' ? 'ingress' : 'compose'}</span>
       ${
         depth
           ? `<div class="dial" role="group" aria-label="profundidad de lectura">
@@ -292,14 +312,54 @@ function renderLog() {
 
 /* ── réplicas ───────────────────────────────────────────────────────────── */
 
-export const replicaState = REPLICAS.map((url) => ({
-  url,
-  instanceId: url.replace('http://localhost:', 'api :'),
-  status: 'down',
-  posts: 0,
-}));
+/**
+ * Estado de las réplicas.
+ *
+ * En modo direct se puede preguntar a cada una por su cuenta. Detrás del ingress NO:
+ * hay una sola URL y no hay forma de dirigir un request a un pod concreto. Así que
+ * las réplicas se DESCUBREN por el `X-Instance-Id` que trae cada respuesta, y lo que
+ * se muestra es cuántas atendió cada una.
+ *
+ * Es más honesto: es exactamente lo que un cliente real puede observar.
+ */
+export const replicaState =
+  MODE === 'ingress'
+    ? []
+    : REPLICAS.map((url) => ({
+        url,
+        instanceId: url.replace('http://localhost:', 'api :'),
+        status: 'down',
+        posts: 0,
+      }));
+
+/** Registra una instancia vista en una respuesta. Sólo se usa en modo ingress. */
+function observeInstance(instanceId) {
+  if (MODE !== 'ingress' || !instanceId || instanceId === '?' || instanceId === '—') {
+    return;
+  }
+
+  let replica = replicaState.find((r) => r.instanceId === instanceId);
+  if (!replica) {
+    replica = { url: '', instanceId, status: 'ready', posts: 0, seen: true };
+    replicaState.push(replica);
+    replicaState.sort((a, b) => a.instanceId.localeCompare(b.instanceId));
+  }
+  replica.posts += 1;
+  replica.status = 'ready';
+}
 
 export async function pollReplicas() {
+  if (MODE === 'ingress') {
+    // No se puede sondear pod por pod detrás de un ingress. Un request al ingress
+    // alcanza para saber que el servicio responde; el resto lo dice el descubrimiento.
+    const health = await call('', '/health/ready');
+    if (health.status === 0) {
+      replicaState.forEach((r) => { r.status = 'down'; });
+    }
+    renderReplicas();
+    return;
+  }
+
   await Promise.all(
     replicaState.map(async (replica) => {
       const health = await call(replica.url, '/health/ready');
@@ -330,7 +390,22 @@ export function renderReplicas() {
   const host = $('#replicas');
   if (!host) return;
 
+  if (MODE === 'ingress' && replicaState.length === 0) {
+    host.innerHTML = `
+      <div class="replica">
+        <div class="replica__head">
+          <span class="dot" data-state="ready"></span>
+          <span class="replica__id">detrás del ingress</span>
+        </div>
+        <div class="replica__row">
+          <span>las réplicas aparecen a medida que atienden requests</span>
+        </div>
+      </div>`;
+    return;
+  }
+
   const max = Math.max(1, ...replicaState.map((r) => r.posts));
+  const etiqueta = MODE === 'ingress' ? 'respuestas suyas' : 'POST atendidos';
 
   host.innerHTML = replicaState
     .map(
@@ -339,11 +414,11 @@ export function renderReplicas() {
         <div class="replica__head">
           <span class="dot" data-state="${r.status}"></span>
           <span class="replica__id">${r.instanceId}</span>
-          <span class="replica__state">${r.status}</span>
+          <span class="replica__state">${r.url ? r.status : 'vista por su X-Instance-Id'}</span>
         </div>
         <div class="replica__row">
           <span class="replica__count">${r.posts}</span>
-          <span>POST atendidos</span>
+          <span>${etiqueta}</span>
         </div>
         <div class="bar"><div class="bar__fill" style="transform:scaleX(${(r.posts / max).toFixed(3)})"></div></div>
       </div>`,
