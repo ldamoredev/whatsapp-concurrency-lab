@@ -85,13 +85,64 @@ Cerrado el 9 de agosto de 2026. Quedó afuera y sigue pendiente:
 - **Sin gráficos de series temporales**: el panel muestra el estado actual, no la
   evolución. Eso es trabajo de Grafana, no del panel.
 
-## S7 — Kubernetes
+## ~~S7 — Kubernetes~~ ✅ parcial (9 de agosto de 2026)
 
-- k3d multi-node, Traefik, `Deployment` ×3, `Service`, `Ingress`.
-- `StatefulSet` de PostgreSQL con PVC, `Job` de migraciones, los dos `CronJob`
-  (`gaps:expire` y `deliveries:cleanup`).
-- `ConfigMap`/`Secret`, requests/limits, las tres probes, PDB `minAvailable: 2`, topology
-  spread, security context no-root, `NetworkPolicy` si el CNI la soporta.
+**Verde y verificado ejecutando:** k3d multi-node (1 server + 2 agents), imagen importada a
+los tres nodos, PostgreSQL en `StatefulSet` con PVC, `Job` de migraciones separado del
+arranque, `Deployment` ×3 no-root con las tres probes y resources, `Service` ClusterIP,
+`ConfigMap`/`Secret`, e **Ingress de Traefik**.
+
+La prueba no fue `/health` en 200: fueron 12 requests con la misma `Idempotency-Key`
+**desde fuera del cluster**, entrando por el ingress → reparto **4/4/4** entre los tres
+pods, 1 creado, 11 replays, **1 mensaje** en la base. El panel también entra por el ingress
+y descubre las réplicas por su `X-Instance-Id`.
+
+**Falta:**
+
+- **PodDisruptionBudget** `minAvailable: 2` y **topology spread / anti-affinity**. Hoy los
+  pods quedan en nodos distintos por decisión del scheduler, no por una regla.
+- **NetworkPolicy**: falta comprobar si flannel (el CNI de k3d) la implementa. Si no,
+  documentar el límite en vez de fingir que está.
+- **Los dos `CronJob`** (`gaps:expire` y `deliveries:cleanup`). Los scripts existen y son el
+  cuerpo exacto; falta el manifest.
+- **Postgres sigue con una sola réplica**, a propósito: prueba consistencia de aplicación y
+  recuperación de pods, **no** alta disponibilidad de la base.
+
+### Tres cosas que costaron tiempo y conviene no repetir
+
+- **`kubectl port-forward svc/…` NO balancea.** Fija un pod y se queda ahí, aunque apuntes al
+  Service: doce curl dieron los doce al mismo pod. Por eso hay dos smoke tests —
+  `k8s:smoke` corre **dentro** del cluster y `k8s:smoke:ingress` **desde el host**.
+- **La sustitución `$(VAR)` de Kubernetes sólo resuelve variables declaradas ANTES** en la
+  misma lista `env`. Con `DATABASE_URL` primero, el contenedor recibió el literal
+  `$(POSTGRES_USER)` y el Job falló sin decir por qué. El orden de `env:` es significativo.
+- **Un Ingress sin puerto publicado es inalcanzable.** El `serverlb` de k3d sólo expone 6443;
+  hizo falta `ports: 8081:80` con `nodeFilter: loadbalancer` en `infra/k3d/cluster.yaml`, y
+  cambiar eso obliga a **recrear el cluster**.
+
+### El test C1 es sensible a la saturación de la máquina
+
+`100 envios concurrentes con la misma key` falló **una vez**, con el cluster k3d y Docker
+Compose corriendo a la vez. Cuatro corridas posteriores de la suite completa en verde, y el
+caso aislado diez veces también.
+
+Causa probable: 100 requests concurrentes contra un pool de 10 con
+`connectionTimeoutMillis: 5000`. Con la máquina saturada algunos dan timeout **de
+conexión**, y la aserción `created + replayed + inProgress === 100` no distingue ese timeout
+de una violación de invariante.
+
+**No se tocó el test**: subir el timeout o aflojar la aserción sería maquillar. Lo correcto
+es que distinga «el sistema violó una invariante» de «la máquina no daba abasto», lo que
+pide clasificar el error de pool aparte. Hasta entonces: correr la suite con un solo stack
+levantado.
+
+### Deuda del entorno
+
+- **kubectl local es v1.24 (2022).** Por eso el cluster está fijado a `rancher/k3s:v1.25.16`
+  en `infra/k3d/cluster.yaml`: el skew soportado es ±1 minor. Al actualizar kubectl, subir
+  ese pin.
+- **Docker Compose 2.5.1 no arranca los contenedores con `up -d --force-recreate`**: los deja
+  en `created` y hay que hacer `docker compose start`.
 
 ## S8 — fallos, carga y evidencia
 
