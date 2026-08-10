@@ -111,6 +111,7 @@
             </div>
           </div>
 
+
           <div class="concept__block">
             <h3 class="concept__h">Cómo se resuelve, mínimo viable</h3>
             <div class="code-pair">
@@ -164,6 +165,158 @@
             </div>
           </div>
 
+          <div class="concept__block">
+            <h3 class="concept__h">El protocolo completo — no alcanza con la key</h3>
+            <div class="lede">
+              <p>
+                La key sola es un rótulo. Lo que hace que funcione es <strong>una secuencia de
+                decisiones</strong>, y cada una tapa un agujero distinto. La forma de demostrar
+                que entendiste el tema no es enumerar los pasos: es saber
+                <strong>qué se rompe si sacás cada uno</strong>.
+              </p>
+            </div>
+
+            <table class="protocol">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>El paso</th>
+                  <th>Qué se rompe si falta</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td class="protocol__n">1</td>
+                  <td class="protocol__step">
+                    El <strong>cliente</strong> genera la key y la <strong>persiste</strong>
+                    antes de mandar
+                  </td>
+                  <td class="protocol__break">
+                    Si la genera el servidor, el reintento trae una key nueva y es un pedido
+                    nuevo. Si el cliente no la guarda y se reinicia, tampoco puede reintentar.
+                  </td>
+                </tr>
+                <tr>
+                  <td class="protocol__n">2</td>
+                  <td class="protocol__step">
+                    Scope <code>(actor, ruta, key)</code>, no <code>key</code> sola
+                  </td>
+                  <td class="protocol__break">
+                    Dos clientes que eligen el mismo UUID —o alguien que manda
+                    <code>"1"</code>— se pisan entre sí.
+                  </td>
+                </tr>
+                <tr>
+                  <td class="protocol__n">3</td>
+                  <td class="protocol__step">
+                    Reclamarla con un <strong><code>INSERT</code></strong>, nunca con
+                    <code>SELECT</code> y después <code>INSERT</code>
+                  </td>
+                  <td class="protocol__break">
+                    <strong>La ventana.</strong> Es el bug del 90% de las implementaciones:
+                    N requests leen «no existe» y N ejecutan.
+                  </td>
+                </tr>
+                <tr>
+                  <td class="protocol__n">4</td>
+                  <td class="protocol__step">
+                    <strong>Fingerprint</strong> canónico del pedido, guardado junto a la key
+                  </td>
+                  <td class="protocol__break">
+                    Un cliente que reusa la etiqueta para otro contenido recibe la respuesta
+                    del pedido anterior y cree que el suyo se hizo. Silencioso.
+                  </td>
+                </tr>
+                <tr>
+                  <td class="protocol__n">5</td>
+                  <td class="protocol__step">
+                    <strong>Estado</strong> de la operación: en curso / completada / fallida
+                  </td>
+                  <td class="protocol__break">
+                    Sin estado no podés distinguir «ya terminó, tomá el resultado» de «hay
+                    alguien ejecutándolo ahora mismo».
+                  </td>
+                </tr>
+                <tr>
+                  <td class="protocol__n">6</td>
+                  <td class="protocol__step">
+                    Guardar la <strong>respuesta</strong> en la
+                    <strong>misma transacción</strong> que el efecto
+                  </td>
+                  <td class="protocol__break">
+                    Si el proceso muere entre ambas, el cobro existe y el reintento no
+                    encuentra nada que devolver: o duplica, o queda colgado para siempre.
+                  </td>
+                </tr>
+                <tr>
+                  <td class="protocol__n">7</td>
+                  <td class="protocol__step">
+                    <strong>Lease</strong> con vencimiento sobre la operación en curso
+                  </td>
+                  <td class="protocol__break">
+                    El proceso dueño se muere y la key queda reclamada para siempre. Esa
+                    operación no se puede reintentar nunca más.
+                  </td>
+                </tr>
+                <tr>
+                  <td class="protocol__n">8</td>
+                  <td class="protocol__step">
+                    <strong>Fencing</strong>: un contador que sube cada vez que alguien retoma
+                  </td>
+                  <td class="protocol__break">
+                    El dueño viejo revive —estaba en una pausa de GC, no muerto— y completa
+                    una operación que ya tomó otro. Dos efectos.
+                  </td>
+                </tr>
+                <tr>
+                  <td class="protocol__n">9</td>
+                  <td class="protocol__step">
+                    <strong>TTL</strong> y barrido de las keys viejas
+                  </td>
+                  <td class="protocol__break">
+                    La tabla crece para siempre. No es una falla de corrección, es una de
+                    operación — y aparece a los seis meses.
+                  </td>
+                </tr>
+                <tr>
+                  <td class="protocol__n">10</td>
+                  <td class="protocol__step">
+                    Una <strong>unicidad propia del dominio</strong>, además de la de la key
+                  </td>
+                  <td class="protocol__break">
+                    Si el cliente regenera la key en el retry, la primera red no lo detecta.
+                    Hace falta una segunda: <code>UNIQUE (cuenta, referencia_externa)</code>.
+                  </td>
+                </tr>
+                <tr>
+                  <td class="protocol__n">11</td>
+                  <td class="protocol__step">
+                    El cliente reintenta con <strong>backoff exponencial y jitter</strong>
+                  </td>
+                  <td class="protocol__break">
+                    Mil clientes que fallaron juntos reintentan juntos y vuelven a tirar el
+                    servicio. Sin jitter, la recuperación se convierte en el segundo incidente.
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+
+            <div class="lede" style="margin-top: 16px">
+              <p class="deep">
+                Los pasos <strong>1 a 6</strong> son el mínimo para que la idempotencia sea
+                correcta. Del <strong>7 al 9</strong> son para que sobreviva a procesos que se
+                mueren y al paso del tiempo. El <strong>10 y el 11</strong> son los que casi
+                nadie menciona en una entrevista, y son los que muestran que lo implementaste
+                de verdad.
+              </p>
+              <p class="deep">
+                Si te preguntan «¿y si el proceso muere justo después de reclamar la key?» —
+                esa es la pregunta del paso 7, y la respuesta es el lease. Si siguen con «¿y si
+                no estaba muerto sino pausado?», es la del 8, y la respuesta es el fencing.
+              </p>
+            </div>
+          </div>
+
           <div class="concept__block concept__block--warn">
             <h3 class="concept__h">El error que se comete siempre</h3>
             <pre class="code"><i>// ❌ parece una protección, no lo es</i>
@@ -178,7 +331,50 @@
                 <a href="/idempotencia">Correlo y mirá el número</a>: cambia en cada corrida.
               </p>
             </div>
+          </div>          <div class="concept__block concept__block--warn">
+            <h3 class="concept__h">El límite: cuando el efecto sale de la base</h3>
+            <div class="lede">
+              <p>
+                Todo lo anterior descansa en una sola cosa: <strong>que el efecto y el registro
+                de la respuesta entren en la misma transacción</strong>. Si el efecto es cobrar
+                con un proveedor externo, mandar un email o publicar en una cola,
+                <strong>eso ya no se cumple</strong>.
+              </p>
+              <pre class="code"><b>BEGIN</b>;
+  <b>INSERT INTO</b> pagos ...;
+  <u>await stripe.charge(...);</u>   <i>← esto NO está en la transacción</i>
+<b>COMMIT</b>;                    <i>← y si falla acá, ya cobraste</i></pre>
+              <p>
+                Las dos salidas, y conviene nombrarlas:
+              </p>
+              <ol class="cases cases--plain">
+                <li>
+                  <span class="cases__n">A</span>
+                  <span><strong>El proveedor también es idempotente.</strong> Stripe, por
+                  ejemplo, acepta su propia <code>Idempotency-Key</code>. Le pasás la tuya —o
+                  una derivada— y el problema se resuelve del otro lado.</span>
+                </li>
+                <li>
+                  <span class="cases__n">B</span>
+                  <span><strong>Outbox.</strong> En la transacción escribís sólo la
+                  <em>intención</em> («hay que cobrar esto»). Un worker aparte la lee y la
+                  ejecuta con reintentos. La base y la intención commitean juntas; la llamada
+                  externa se hace después, y puede repetirse sin daño porque el proveedor es
+                  idempotente o porque la marcás como hecha al volver.</span>
+                </li>
+              </ol>
+              <p class="concept__punch" style="margin-top: 14px">
+                <strong>Exactly-once no existe</strong> a través de una red.
+              </p>
+              <p>
+                Lo que existe es <strong>at-least-once más idempotencia en el receptor</strong>.
+                Si alguien te dice que su sistema es exactly-once, o tiene un receptor
+                idempotente y no lo llama así, o está equivocado.
+              </p>
+            </div>
           </div>
+
+
         </div>
       </section>
 
@@ -285,6 +481,166 @@ t3  proceso B  <b>escribe</b> saldo = 90   <u>← se perdió un descuento</u></p
                 superpoder es que elimina los estados intermedios observables — y con eso
                 elimina la pregunta «¿me quedé a la mitad?», que es la que obliga a escribir
                 lógica de recuperación.
+              </p>
+            </div>
+          </div>
+
+
+          <div class="concept__block">
+            <h3 class="concept__h">El caso que más se pregunta: descontar stock</h3>
+            <div class="lede">
+              <p>
+                Es el ejercicio clásico porque tiene las dos mitades: <strong>cobrar</strong>
+                necesita idempotencia, <strong>descontar stock</strong> necesita control de
+                concurrencia. Y la solución del stock cabe en una sentencia.
+              </p>
+            </div>
+
+            <div class="code-pair">
+              <div>
+                <h4 class="concept__sub" style="color: var(--bad)">el bug clásico</h4>
+                <pre class="code"><b>SELECT</b> stock <b>FROM</b> productos <b>WHERE</b> id = $1;
+<i>-- lee 1</i>
+
+<b>if</b> (stock &gt;= 1) {         <u>← LA VENTANA</u>
+  <b>UPDATE</b> productos
+     <b>SET</b> stock = stock - 1
+   <b>WHERE</b> id = $1;
+}
+<u>-- dos requests pasan el if. stock = -1</u>
+<u>-- vendiste algo que no tenías: overselling</u></pre>
+              </div>
+              <div>
+                <h4 class="concept__sub" style="color: var(--ok)">una sola sentencia</h4>
+                <pre class="code"><b>UPDATE</b> productos
+   <b>SET</b> stock = stock - 1
+ <b>WHERE</b> id = $1
+   <s>AND stock &gt;= 1</s>;   <i>← la condición va acá</i>
+
+<i>-- ¿0 filas? no había stock.</i>
+<i>-- Sin lock, sin ventana, sin serializar.</i>
+
+<s>CHECK (stock &gt;= 0)</s>  <i>-- la red debajo</i></pre>
+              </div>
+            </div>
+
+            <div class="lede" style="margin-top: 16px">
+              <p>
+                El <code>UPDATE</code> condicional lee, decide y escribe en un solo acto
+                atómico. No hay instante entre la comparación y la resta.
+                <strong>«0 filas afectadas» es la respuesta de negocio</strong>: no hay stock.
+              </p>
+              <p class="deep">
+                Las repreguntas que siguen, y la respuesta corta de cada una:
+              </p>
+            </div>
+
+            <table class="protocol deep">
+              <thead>
+                <tr>
+                  <th>Te preguntan</th>
+                  <th>Respondés</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td class="protocol__step">¿Y si el cliente compra 5 unidades?</td>
+                  <td class="protocol__break">
+                    <code>SET stock = stock - 5 WHERE stock &gt;= 5</code>. Mismo mecanismo.
+                  </td>
+                </tr>
+                <tr>
+                  <td class="protocol__step">
+                    ¿Por qué no <code>SELECT … FOR UPDATE</code>?
+                  </td>
+                  <td class="protocol__break">
+                    Funciona, pero serializa a todos los que compran ese producto. El update
+                    condicional no bloquea a nadie. <strong>El lock hace falta cuando tenés que
+                    leer, decidir algo que no cabe en un <code>WHERE</code>, y después
+                    escribir.</strong>
+                  </td>
+                </tr>
+                <tr>
+                  <td class="protocol__step">¿Y si el pago falla después de descontar?</td>
+                  <td class="protocol__break">
+                    Ahí no alcanza una sentencia: es una <strong>saga</strong>. Se
+                    <em>reserva</em> el stock con un TTL, se cobra, y se confirma o se libera.
+                    La reserva vencida la barre un job — y ese job tiene que ser idempotente.
+                  </td>
+                </tr>
+                <tr>
+                  <td class="protocol__step">¿Y si hay varios productos en el carrito?</td>
+                  <td class="protocol__break">
+                    <strong>Ordená siempre por el mismo criterio</strong> (por ejemplo,
+                    <code>product_id</code> ascendente) antes de tocarlos. Dos carritos con los
+                    mismos productos en orden distinto se bloquean mutuamente: deadlock.
+                  </td>
+                </tr>
+                <tr>
+                  <td class="protocol__step">
+                    ¿Y si el stock vive en Redis por performance?
+                  </td>
+                  <td class="protocol__break">
+                    Ahí tenés <strong>dos autoridades</strong> que pueden desincronizarse. Redis
+                    sirve como <em>caché de lectura</em> o como rate limiter; la decisión de
+                    «hay o no hay» tiene que quedar donde está la transacción.
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="concept__block">
+            <h3 class="concept__h">Niveles de aislamiento — el vocabulario</h3>
+            <table class="protocol">
+              <thead>
+                <tr>
+                  <th>Nivel</th>
+                  <th>Evita</th>
+                  <th>Cuesta</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td class="protocol__step"><code>READ COMMITTED</code><br /><span class="protocol__tag">default en PostgreSQL</span></td>
+                  <td class="protocol__break">lecturas sucias</td>
+                  <td class="protocol__break">
+                    nada — pero <strong>el lost update sigue siendo posible</strong>, y por eso
+                    existen las cuatro herramientas de arriba
+                  </td>
+                </tr>
+                <tr>
+                  <td class="protocol__step"><code>REPEATABLE READ</code></td>
+                  <td class="protocol__break">
+                    + lecturas no repetibles. En PostgreSQL también aborta el lost update
+                  </td>
+                  <td class="protocol__break">
+                    errores de serialización que <strong>tenés que reintentar vos</strong>
+                  </td>
+                </tr>
+                <tr>
+                  <td class="protocol__step"><code>SERIALIZABLE</code></td>
+                  <td class="protocol__break">+ phantom reads y write skew</td>
+                  <td class="protocol__break">
+                    más abortos y más contención bajo carga
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+            <div class="lede" style="margin-top: 14px">
+              <p>
+                La trampa: <strong>subir el aislamiento no elimina el problema, lo convierte en
+                errores que tenés que reintentar</strong>. Y no te salva de nada si el chequeo
+                está en un <code>if</code> de la aplicación en vez de en el
+                <code>WHERE</code>.
+              </p>
+              <p class="deep">
+                La respuesta buena a «¿qué nivel usarías?» no es un nivel: es
+                <strong>«depende del camino, y lo mediría»</strong>.
+                <code>READ COMMITTED</code> con constraints y updates condicionales cubre la
+                mayoría de los casos y no tiene costo. <code>SERIALIZABLE</code> con reintento
+                se justifica cuando la invariante involucra <em>varias filas</em> y no se puede
+                expresar en un solo <code>WHERE</code> — el caso del write skew.
               </p>
             </div>
           </div>

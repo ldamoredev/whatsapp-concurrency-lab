@@ -1467,3 +1467,143 @@ button.index__item:disabled {
     white-space: normal;
   }
 }
+
+/* ── tabla de protocolo / repreguntas ───────────────────────────────────── */
+
+.protocol {
+  width: 100%;
+  border-collapse: collapse;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+  font-size: 12.5px;
+  table-layout: fixed;
+}
+
+.protocol thead th {
+  text-align: left;
+  font-weight: 500;
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-faint);
+  background: var(--panel-2);
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.protocol thead th:first-child {
+  width: 40px;
+}
+
+/* Dos columnas: paso y consecuencia con el mismo peso. */
+.protocol thead th:nth-child(2) {
+  width: 38%;
+}
+
+.protocol td {
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--panel);
+  vertical-align: top;
+  line-height: 1.65;
+}
+
+.protocol tr:last-child td {
+  border-bottom: 0;
+}
+
+.protocol__n {
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.protocol__step {
+  color: var(--text);
+}
+
+.protocol__step code {
+  color: var(--accent);
+}
+
+.protocol__step strong {
+  font-weight: 600;
+}
+
+/* La consecuencia se lee en secundario: el paso es el sujeto, no el castigo. */
+.protocol__break {
+  color: var(--text-dim);
+}
+
+.protocol__break strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.protocol__break code {
+  color: var(--text);
+}
+
+.protocol__tag {
+  display: inline-block;
+  margin-top: 3px;
+  font-size: 10px;
+  color: var(--text-faint);
+}
+
+/* La lista de casos sin el resaltado del caso 2. */
+.cases--plain li:nth-child(2) {
+  background: var(--panel);
+  color: var(--text-dim);
+}
+
+.cases--plain li {
+  align-items: flex-start;
+  line-height: 1.65;
+}
+
+.cases--plain strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+@media (max-width: 760px) {
+  .protocol,
+  .protocol thead,
+  .protocol tbody,
+  .protocol tr,
+  .protocol td {
+    display: block;
+    width: auto;
+  }
+
+  .protocol thead {
+    display: none;
+  }
+
+  .protocol tr {
+    border-bottom: 1px solid var(--line);
+    padding: 4px 0;
+  }
+
+  .protocol tr:last-child {
+    border-bottom: 0;
+  }
+
+  .protocol td {
+    border-bottom: 0;
+    padding: 6px 14px;
+  }
+
+  /* En angosto, la consecuencia se sangra bajo su paso en vez de perder la relación. */
+  .protocol__break {
+    padding-left: 26px;
+    padding-bottom: 12px;
+    font-size: 12px;
+  }
+
+  .protocol__n {
+    padding-bottom: 0;
+  }
+}

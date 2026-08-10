@@ -43,11 +43,18 @@ npm run stack:up
 Y abrir **http://localhost:3001**.
 
 La **portada** explica los dos conceptos con la profundidad que hace falta para contarlos en
-una entrevista: qué es la idempotencia, qué problema resuelve, cuándo recurrir a ella —y
-cuándo no—, y el mínimo viable para implementarla. Después lo mismo con la concurrencia
-sobre estado compartido: por qué no alcanza con escribir con cuidado, y las cuatro
-herramientas (constraint única, lock pesimista, update condicional, transacción) con el
-criterio para elegir entre ellas.
+una entrevista.
+
+**Idempotencia**: qué problema resuelve, cuándo recurrir a ella —y cuándo no—, el mínimo
+viable, y **el protocolo completo en 11 pasos con qué se rompe si falta cada uno**. La key
+sola es un rótulo; lo que hace que funcione es la secuencia. Cierra con el límite que casi
+nadie menciona: qué pasa **cuando el efecto sale de la base** (proveedor externo, outbox, y
+por qué exactly-once no existe).
+
+**Concurrencia**: la forma que tienen todos estos bugs —una ventana entre leer y escribir—,
+las cuatro herramientas (constraint única, lock pesimista, update condicional, transacción)
+con el criterio para elegir, **el caso de descontar stock resuelto** con sus cinco
+repreguntas típicas, y los niveles de aislamiento con lo que cuesta cada uno.
 
 Cada escenario **corre dos veces**, con la misma entrada y contra la misma base: primero por
 el camino ingenuo —el que uno escribe cuando todavía no pensó en concurrencia— y después por
