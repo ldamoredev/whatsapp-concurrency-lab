@@ -23,5 +23,10 @@ kubectl -n "$NS" logs job/migrate | grep -v "injected env" | tail -3
 kubectl apply -f "$BASE/30-api.yaml"
 kubectl -n "$NS" rollout status deployment/api --timeout=180s
 
+# El Ingress se aplica al final: sin backend listo, Traefik publicaria una ruta que
+# devuelve 503.
+kubectl apply -f "$BASE/40-ingress.yaml"
+kubectl -n "$NS" get ingress api
+
 echo
 kubectl -n "$NS" get pods -o wide

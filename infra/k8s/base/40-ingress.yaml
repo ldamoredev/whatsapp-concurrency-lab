@@ -1,0 +1,27 @@
+# Ingress de Traefik para la API.
+#
+# Traefik viene instalado con k3s: no se agrega ningun controller, solo se declara
+# la regla. El alcance prohibe sumar Nginx, y no hace falta.
+#
+# Sin `host:` a proposito: es un laboratorio local y un host ficticio obligaria a
+# tocar /etc/hosts o a depender de que *.localhost resuelva, que en macOS no es
+# confiable. Con la regla catch-all, `curl localhost:8081/...` entra directo.
+#
+# El puerto del host lo publica k3d (ver infra/k3d/cluster.yaml): 8081 -> serverlb:80.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: api
+  namespace: whatsapp-lab
+spec:
+  ingressClassName: traefik
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: api
+                port:
+                  number: 80

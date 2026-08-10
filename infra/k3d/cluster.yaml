@@ -14,6 +14,16 @@ metadata:
 servers: 1
 agents: 2
 
+# Puerto del host hacia el load balancer del cluster, que es por donde entra Traefik.
+# Sin este mapeo el Ingress existe pero es inalcanzable desde afuera: el serverlb solo
+# publica 6443 (la API de Kubernetes) y nada mas.
+#
+# 8081 y no 80 para no pedir privilegios ni chocar con lo que ya escuche en el host.
+ports:
+  - port: 8081:80
+    nodeFilters:
+      - loadbalancer
+
 # k3s fijado a 1.25 a proposito: el kubectl de esta maquina es 1.24, y la politica
 # de skew de Kubernetes soporta +-1 minor. Con el k3s por defecto (1.35) kubectl
 # fallaria de formas confusas. Cuando se actualice kubectl, se sube este pin.

@@ -34,7 +34,8 @@ Lo que existe hoy:
 - **Cluster k3d multi-node** (1 server + 2 agents) con PostgreSQL en StatefulSet + PVC, Job
   de migraciones separado, y la API con `replicas: 3` no-root detrás de un Service ClusterIP.
 
-Lo que **no** existe todavía: Ingress de Traefik, PDB, k6, Toxiproxy y Grafana.
+Lo que **no** existe todavía: PDB, topology spread, NetworkPolicy, CronJobs, k6, Toxiproxy
+y Grafana.
 Ver [`docs/PENDIENTE.md`](docs/PENDIENTE.md).
 
 ## Kubernetes
@@ -46,25 +47,33 @@ npm run cluster:up && npm run k8s:build && npm run k8s:deploy
 Los tres son idempotentes: `cluster:up` no recrea un cluster existente, y `deploy` se puede
 correr las veces que haga falta. Después:
 
+Traefik viene con k3s, así que el Ingress sólo declara la regla. Queda en
+**http://localhost:8081** — el mapeo `8081 → serverlb:80` lo publica k3d
+(`infra/k3d/cluster.yaml`).
+
 ```bash
-npm run k8s:smoke
+npm run k8s:smoke:ingress
 ```
 
-Corrida real dentro del cluster — 12 requests con la misma idempotency key contra el Service:
+Corrida real **desde fuera del cluster**, entrando por Traefik: 12 requests con la misma
+`Idempotency-Key`.
 
 ```text
-HTTP/1.1 201 Created  x-instance-id: api-7668754fd-nh69x
-HTTP/1.1 200 OK       x-instance-id: api-7668754fd-89t7x
-HTTP/1.1 200 OK       x-instance-id: api-7668754fd-r8m7t
-…
-"messages":1, "operations":1, "batches":1, "envelopes":3
+ 1  HTTP/1.1 201 Created  X-Instance-Id: api-7668754fd-m7tfz
+ 2  HTTP/1.1 200 OK       X-Instance-Id: api-7668754fd-jdfbs
+ 3  HTTP/1.1 200 OK       X-Instance-Id: api-7668754fd-sc8l4
+ 4  HTTP/1.1 200 OK       X-Instance-Id: api-7668754fd-m7tfz
+ …
+reparto:  4  api-…-jdfbs   4  api-…-m7tfz   4  api-…-sc8l4
+base:     "messages":1, "operations":1, "batches":1, "envelopes":3
 ```
 
-Tres pods en tres nodos, un solo mensaje.
+**Tres pods, reparto exacto 4/4/4, un solo mensaje.** El script falla con exit code ≠ 0 si
+no hubo reparto, si se creó más de uno o si la base no quedó con un mensaje.
 
-> **El smoke test corre DENTRO del cluster a propósito.** `kubectl port-forward svc/…` no
-> balancea: fija un pod y se queda ahí, aunque apuntes al Service. El reparto sólo se ve
-> desde adentro, hasta que exista el Ingress.
+> Hay dos smoke tests y la diferencia importa. `k8s:smoke` corre **dentro** del cluster
+> porque `kubectl port-forward svc/…` no balancea: fija un pod y se queda ahí.
+> `k8s:smoke:ingress` corre **desde el host**, por donde entraría un cliente real.
 
 `npm run cluster:down` borra **únicamente** este cluster.
 
