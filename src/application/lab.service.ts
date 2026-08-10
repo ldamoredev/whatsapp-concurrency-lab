@@ -50,11 +50,15 @@ export interface LabState {
   }>;
   receipts: Array<{ messageId: string; deviceId: string; state: string; version: number }>;
   operations: Array<{
+    actorId: string;
+    route: string;
     key: string;
+    fingerprint: string;
     status: string;
     attempt: number;
     responseStatus: number | null;
     resourceId: string | null;
+    responseBody: unknown;
   }>;
   invariantViolations: Array<{ invariant: string; detail: string }>;
 }
@@ -315,24 +319,33 @@ export class LabService {
 
   private async operations(): Promise<LabState['operations']> {
     const result = await this.pool.query<{
+      actor_id: string;
+      route: string;
       key: string;
+      fingerprint: string;
       status: string;
       attempt: number;
       response_status: number | null;
       resource_id: string | null;
+      response_body: unknown;
     }>(`
-      SELECT key, status, attempt, response_status, resource_id
+      SELECT actor_id, route, key, fingerprint, status, attempt,
+             response_status, resource_id, response_body
         FROM idempotency_operations
        ORDER BY created_at DESC
        LIMIT 20
     `);
 
     return result.rows.map((row) => ({
+      actorId: row.actor_id,
+      route: row.route,
       key: row.key,
+      fingerprint: row.fingerprint,
       status: row.status,
       attempt: row.attempt,
       responseStatus: row.response_status,
       resourceId: row.resource_id,
+      responseBody: row.response_body,
     }));
   }
 

@@ -49,6 +49,7 @@ el servidor, todo pasaría por un proceso y no habría carrera que mostrar.
 
 | Página | La pregunta | Sin protección | Con protección |
 |---|---|---|---|
+| **/probar** | ¿qué valores viajan y cuál de las dos reglas actuó? | un request por vez, editable | — |
 | **/idempotencia** | el cliente reintenta, ¿cómo sabe el servidor que es el mismo pedido? | 2 a 15 mensajes | exactamente 1 |
 | **/orden** | los mensajes llegan desordenados, ¿se publican como llegan? | `1 · 3 · 4 · 2` | `1 · 2 · 3 · 4` |
 | **/entrega** | tres dispositivos confirman con reintentos, ¿cómo se cuenta? | progreso 21 de 3 | 3 de 3 |
@@ -72,6 +73,19 @@ y tiene que decir siempre *sin violaciones*. Contar respuestas 2xx no demostrar�
 El dial **breve / detallado** cambia la densidad de la prosa sin mover el esqueleto: el panel
 sirve para aprenderlo solo y para mostrárselo a alguien, y una sola densidad falla en una de
 las dos.
+
+### El banco de pruebas
+
+`/probar` manda **un request por vez** y deja tocar cada campo: la key, el texto, el
+`clientSequence`, el `senderId`. Muestra el request tal como sale por la red, el
+`fingerprint` que el servidor calcula —con la misma función que usa el envío real, no una
+copia— y **por qué decidió lo que decidió**: si actuó la key o el fingerprint, y si creó algo
+o no.
+
+Es la respuesta a la pregunta que el resto del panel da por sabida: **el servidor no adivina
+si estás reintentando; se lo decís vos repitiendo la key**. La key responde *"¿es el mismo
+intento?"* y la decide el cliente; el fingerprint responde *"¿el cliente está usando bien esa
+etiqueta?"* y lo verifica el servidor.
 
 > El camino sin protección corre contra **tablas espejo sin constraints**
 > (`migrations/0006`), nunca contra las reales: así la demostración no deja el sistema

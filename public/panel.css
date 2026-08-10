@@ -950,3 +950,315 @@ table.tbl .empty td {
     font-size: 32px;
   }
 }
+
+/* ── banco de pruebas ───────────────────────────────────────────────────── */
+
+.origin {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.9fr) 1.1fr;
+  gap: 16px;
+  align-items: start;
+}
+
+.origin__sql {
+  margin: 0;
+}
+
+.origin__map {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+}
+
+.origin__row {
+  display: grid;
+  grid-template-columns: 88px 20px 1fr;
+  align-items: baseline;
+  gap: 8px;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  font-size: 12px;
+}
+
+.origin__col {
+  color: var(--ok);
+  font-weight: 600;
+}
+
+.origin__arrow {
+  color: var(--text-faint);
+}
+
+.origin__src {
+  color: var(--text-dim);
+  line-height: 1.55;
+}
+
+.origin__src b {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.origin__src em {
+  font-style: normal;
+  color: var(--text);
+}
+
+/* ── formulario ─────────────────────────────────────────────────────────── */
+
+.builder {
+  display: grid;
+  grid-template-columns: minmax(300px, 0.85fr) 1.15fr;
+  gap: 16px;
+  align-items: start;
+}
+
+.builder__form {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+.field {
+  display: grid;
+  gap: 5px;
+}
+
+.field__label {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-faint);
+}
+
+.field__label em {
+  font-style: normal;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text-faint);
+  opacity: 0.75;
+}
+
+.field__input {
+  font: inherit;
+  font-size: 13px;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--text);
+  width: 100%;
+  min-width: 0;
+}
+
+.field__input:hover {
+  border-color: var(--text-faint);
+}
+
+.field__input:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.field__hint {
+  font-size: 10.5px;
+  color: var(--text-faint);
+  line-height: 1.5;
+}
+
+.field-row {
+  display: grid;
+  grid-template-columns: 1fr 130px;
+  gap: 10px;
+}
+
+.builder__actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+
+.btn--primary {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  font-weight: 600;
+}
+
+.btn--primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
+}
+
+/* ── preview ────────────────────────────────────────────────────────────── */
+
+.builder__preview {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+  min-width: 0;
+}
+
+.preview__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-faint);
+  margin-top: 6px;
+}
+
+.preview__hint {
+  text-transform: none;
+  letter-spacing: 0;
+  opacity: 0.8;
+}
+
+.derived {
+  display: grid;
+  gap: 1px;
+  background: var(--line-soft);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.derived__row {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 10px;
+  align-items: baseline;
+  padding: 8px 12px;
+  background: var(--panel);
+  font-size: 11.5px;
+  min-width: 0;
+}
+
+.derived__k {
+  color: var(--text-faint);
+}
+
+.derived__v {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.derived__v--wrap {
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--text-dim);
+  line-height: 1.55;
+}
+
+.derived__row--wide {
+  grid-template-columns: 120px 1fr;
+}
+
+/* ── resultado ──────────────────────────────────────────────────────────── */
+
+.outcome {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  padding: 16px 18px;
+  display: grid;
+  gap: 14px;
+}
+
+.outcome__head {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.outcome__status {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.outcome__status[data-tone='ok'] {
+  color: var(--ok);
+}
+.outcome__status[data-tone='replay'] {
+  color: var(--info);
+}
+.outcome__status[data-tone='warn'] {
+  color: var(--warn);
+}
+.outcome__status[data-tone='bad'] {
+  color: var(--bad);
+}
+
+.outcome__title {
+  font-size: 14px;
+}
+
+.outcome__instance {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.outcome__grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  align-items: start;
+}
+
+.outcome__why {
+  margin-top: 10px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--text-dim);
+  border-top: 1px solid var(--line-soft);
+  padding-top: 10px;
+}
+
+.outcome__why code {
+  color: var(--text);
+}
+
+.outcome__why strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* Los experimentos guiados reusan el índice, pero son botones. */
+button.index__item {
+  font: inherit;
+  width: 100%;
+  text-align: left;
+  border-left: 0;
+  border-right: 0;
+  border-top: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+button.index__item:disabled {
+  opacity: 0.45;
+  cursor: progress;
+}
+
+@media (max-width: 900px) {
+  .origin,
+  .builder,
+  .outcome__grid {
+    grid-template-columns: 1fr;
+  }
+}

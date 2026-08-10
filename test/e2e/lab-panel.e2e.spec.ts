@@ -24,6 +24,7 @@ describe('el panel se sirve desde la propia API', () => {
     for (const [ruta, titulo] of [
       ['/', 'Tres procesos'],
       ['/idempotencia', 'Idempotencia'],
+      ['/probar', 'Banco de pruebas'],
       ['/orden', 'Orden y huecos'],
       ['/entrega', 'Entrega multi-dispositivo'],
       ['/infra', 'Réplicas y base'],
@@ -40,7 +41,14 @@ describe('el panel se sirve desde la propia API', () => {
     expect(css.status).toBe(200);
     expect(css.headers.get('content-type')).toContain('text/css');
 
-    for (const modulo of ['/lib.js', '/idempotencia.js', '/orden.js', '/entrega.js', '/infra.js']) {
+    for (const modulo of [
+      '/lib.js',
+      '/idempotencia.js',
+      '/probar.js',
+      '/orden.js',
+      '/entrega.js',
+      '/infra.js',
+    ]) {
       const response = await fetch(`${baseUrl}${modulo}`);
       expect(response.status, `modulo ${modulo}`).toBe(200);
       expect(response.headers.get('content-type')).toContain('javascript');
@@ -111,6 +119,45 @@ describe('endpoints de laboratorio', () => {
     expect(payload.counts).toMatchObject({ messages: 0, operations: 0 });
     // La verificacion de invariantes corre contra la base y tiene que dar vacio.
     expect(payload.invariantViolations).toEqual([]);
+  });
+
+  it('el fingerprint no depende del orden de los campos, pero sí del contenido', async () => {
+    const pedido = {
+      conversationId: 'aaaa',
+      senderId: 'bbbb',
+      senderDeviceId: 'cccc',
+      clientMessageId: 'local-1',
+      clientSequence: 1,
+      body: 'hola',
+    };
+
+    const calcular = async (cuerpo: Record<string, unknown>) => {
+      const response = await fetch(`${baseUrl}/lab/fingerprint`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(cuerpo),
+      });
+      return (await response.json()) as { fingerprint: string; canonical: string };
+    };
+
+    const original = await calcular(pedido);
+    // Mismos campos, otro orden de escritura: el fingerprint tiene que ser identico,
+    // o un reintento legitimo se veria como conflicto.
+    const reordenado = await calcular({
+      body: pedido.body,
+      clientSequence: pedido.clientSequence,
+      clientMessageId: pedido.clientMessageId,
+      senderDeviceId: pedido.senderDeviceId,
+      senderId: pedido.senderId,
+      conversationId: pedido.conversationId,
+    });
+    const otroTexto = await calcular({ ...pedido, body: 'chau' });
+
+    expect(reordenado.fingerprint).toBe(original.fingerprint);
+    expect(otroTexto.fingerprint).not.toBe(original.fingerprint);
+    expect(original.fingerprint).toMatch(/^[0-9a-f]{64}$/);
+    // La cadena canonica se expone para que el panel muestre QUE se hashea.
+    expect(original.canonical).toContain('"body":"hola"');
   });
 
   it('los barridos son invocables y responden que hicieron', async () => {

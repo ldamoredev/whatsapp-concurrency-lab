@@ -76,6 +76,7 @@ export const naiveState = () => call(REPLICAS[0], '/lab/naive/state').then((r) =
 const NAV = [
   ['/', 'portada'],
   ['/idempotencia', 'idempotencia'],
+  ['/probar', 'banco de pruebas'],
   ['/orden', 'orden'],
   ['/entrega', 'entrega'],
   ['/infra', 'réplicas'],

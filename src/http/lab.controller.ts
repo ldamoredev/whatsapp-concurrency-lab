@@ -2,6 +2,8 @@ import { Body, Controller, Get, HttpCode, Inject, Post, Query } from '@nestjs/co
 import { CleanupDeliveriesService } from '../application/cleanup-deliveries.service';
 import { ExpireGapsService } from '../application/expire-gaps.service';
 import { LabService, type LabFixture, type LabState } from '../application/lab.service';
+import { canonicalize, fingerprintOf } from '../domain/idempotency/fingerprint';
+import { SEND_MESSAGE_ROUTE } from '../domain/idempotency/idempotency-operation';
 import { INSTANCE_ID } from '../observability/instance';
 
 /**
@@ -55,6 +57,36 @@ export class LabController {
 
     const expired = await this.gaps.run();
     return { instanceId: INSTANCE_ID, expired: expired.length, streams: expired };
+  }
+
+  /**
+   * Calcula el fingerprint de un pedido, con la MISMA funcion que usa el envio real.
+   *
+   * El panel lo usa para mostrar, antes de mandar nada, que valor va a quedar guardado
+   * y como cambia al tocar un campo. Se expone en vez de reimplementarlo en el
+   * navegador para que lo que se ve sea el valor de verdad, no una copia que puede
+   * divergir.
+   */
+  @HttpCode(200)
+  @Post('fingerprint')
+  fingerprint(@Body() body: Record<string, unknown>): unknown {
+    const effect = {
+      conversationId: String(body.conversationId ?? ''),
+      senderId: String(body.senderId ?? ''),
+      senderDeviceId: String(body.senderDeviceId ?? ''),
+      clientMessageId: String(body.clientMessageId ?? ''),
+      clientSequence: Number(body.clientSequence ?? 0),
+      body: String(body.body ?? ''),
+    };
+
+    return {
+      instanceId: INSTANCE_ID,
+      route: SEND_MESSAGE_ROUTE,
+      // La cadena exacta que se hashea: es lo que hace visible por que dos pedidos
+      // con los campos en otro orden dan el mismo fingerprint.
+      canonical: canonicalize(effect),
+      fingerprint: fingerprintOf(effect),
+    };
   }
 
   /** Corre el barrido de cleanup de entrega: el otro CronJob. */

@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Banco de pruebas · whatsapp-concurrency-lab</title>
+    <link rel="stylesheet" href="/panel.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>◧</text></svg>"
+    />
+  </head>
+  <body data-depth="detallado">
+    <header class="top" id="top"></header>
+
+    <main class="page">
+      <div class="lede">
+        <h1>Banco de pruebas</h1>
+        <p class="question">
+          Un request por vez. Cambiá lo que quieras y mirá qué decide el servidor.
+        </p>
+        <p>
+          Los escenarios mandan 60 requests de golpe. Acá va uno solo, y podés tocar cada
+          campo antes de mandarlo. <strong>El servidor no adivina si estás reintentando</strong>:
+          vos se lo decís repitiendo la misma <code>Idempotency-Key</code>.
+        </p>
+      </div>
+
+      <!-- ── de dónde sale cada valor ────────────────────────────────────── -->
+      <section class="section">
+        <h2>La constraint y de dónde sale cada valor</h2>
+        <div class="origin">
+          <pre class="code origin__sql"><s>UNIQUE (actor_id, route, key)</s>
+<i>-- en la tabla idempotency_operations</i></pre>
+          <div class="origin__map">
+            <div class="origin__row">
+              <code class="origin__col">actor_id</code>
+              <span class="origin__arrow" aria-hidden="true">←</span>
+              <span class="origin__src"
+                >campo <b>senderId</b>, del <em>cuerpo</em> del request</span
+              >
+            </div>
+            <div class="origin__row">
+              <code class="origin__col">route</code>
+              <span class="origin__arrow" aria-hidden="true">←</span>
+              <span class="origin__src"
+                >constante del endpoint. <b>No viaja en el request</b>: la pone el
+                servidor</span
+              >
+            </div>
+            <div class="origin__row">
+              <code class="origin__col">key</code>
+              <span class="origin__arrow" aria-hidden="true">←</span>
+              <span class="origin__src">header <b>Idempotency-Key</b>, lo elegís vos</span>
+            </div>
+          </div>
+        </div>
+        <div class="lede" style="margin-top: 16px">
+          <p class="deep">
+            Los tres juntos son la etiqueta. Por eso la misma key de <em>otro</em> usuario, o
+            contra <em>otra</em> ruta, es una operación distinta y no choca.
+          </p>
+        </div>
+      </section>
+
+      <!-- ── el request ──────────────────────────────────────────────────── -->
+      <section class="section">
+        <h2>El request que vas a mandar</h2>
+
+        <div class="builder">
+          <div class="builder__form">
+            <label class="field">
+              <span class="field__label">Idempotency-Key <em>header</em></span>
+              <input class="field__input" id="f-key" type="text" spellcheck="false" />
+              <span class="field__hint">
+                repetila para reintentar · cambiala para que sea un pedido nuevo
+              </span>
+            </label>
+
+            <label class="field">
+              <span class="field__label">body <em>el texto del mensaje</em></span>
+              <input class="field__input" id="f-body" type="text" />
+              <span class="field__hint">
+                cambialo sin cambiar la key y mirá qué pasa
+              </span>
+            </label>
+
+            <div class="field-row">
+              <label class="field">
+                <span class="field__label">clientMessageId</span>
+                <input class="field__input" id="f-cmid" type="text" spellcheck="false" />
+              </label>
+              <label class="field">
+                <span class="field__label">clientSequence</span>
+                <input class="field__input" id="f-seq" type="number" min="1" step="1" />
+              </label>
+            </div>
+
+            <label class="field">
+              <span class="field__label">senderId <em>= actor_id</em></span>
+              <select class="field__input" id="f-sender"></select>
+              <span class="field__hint">
+                cambiá de usuario y la misma key deja de chocar
+              </span>
+            </label>
+
+            <div class="builder__actions">
+              <button class="btn btn--primary" id="send" type="button">mandar 1 request</button>
+              <button class="btn" id="new-key" type="button">key nueva</button>
+              <button class="btn" id="reset" type="button">reiniciar</button>
+            </div>
+          </div>
+
+          <div class="builder__preview">
+            <div class="preview__head">lo que sale por la red</div>
+            <pre class="code" id="preview"></pre>
+
+            <div class="preview__head">
+              lo que el servidor calcula
+              <span class="preview__hint">no viaja en el request</span>
+            </div>
+            <div class="derived">
+              <div class="derived__row">
+                <span class="derived__k">route</span>
+                <code class="derived__v" id="d-route">—</code>
+              </div>
+              <div class="derived__row">
+                <span class="derived__k">fingerprint</span>
+                <code class="derived__v" id="d-fp">—</code>
+              </div>
+              <div class="derived__row derived__row--wide">
+                <span class="derived__k">se hashea esto</span>
+                <code class="derived__v derived__v--wrap" id="d-canon">—</code>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── qué decidió ─────────────────────────────────────────────────── -->
+      <section class="section">
+        <h2>Qué decidió el servidor</h2>
+        <div class="outcome" id="outcome">
+          <p class="empty-note" style="margin: 0">
+            mandá un request para ver la respuesta y el porqué
+          </p>
+        </div>
+      </section>
+
+      <!-- ── la tabla ────────────────────────────────────────────────────── -->
+      <section class="section">
+        <h2>La tabla <code>idempotency_operations</code></h2>
+        <div class="tbl-box">
+          <div class="tbl-box__head">
+            <h3>lo que quedó guardado</h3>
+            <span class="tbl-box__hint">la fila que decide todo</span>
+          </div>
+          <div class="tbl-scroll">
+            <table class="tbl" id="tbl-ops">
+              <thead>
+                <tr>
+                  <th>actor_id</th>
+                  <th>key</th>
+                  <th>fingerprint</th>
+                  <th>status</th>
+                  <th>resource_id</th>
+                  <th>response</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+        <p class="run__note" style="text-align: left; margin-top: 10px">
+          Cada fila es una etiqueta reclamada. Si tu request encuentra su
+          <code>(actor_id, route, key)</code> acá, no ejecuta nada nuevo.
+        </p>
+      </section>
+
+      <!-- ── experimentos ────────────────────────────────────────────────── -->
+      <section class="section">
+        <h2>Probá estos cuatro</h2>
+        <div class="index">
+          <button class="index__item try" type="button" data-try="same">
+            <span class="index__id">1</span>
+            <span class="index__body">
+              <h3>Mandá el mismo request dos veces</h3>
+              <p class="index__q">
+                Sin tocar nada. Es el caso del cliente que perdió la respuesta y reintenta.
+              </p>
+              <span class="index__contrast"
+                ><span>esperá: <b class="g">200, mismo messageId</b></span></span
+              >
+            </span>
+          </button>
+
+          <button class="index__item try" type="button" data-try="body">
+            <span class="index__id">2</span>
+            <span class="index__body">
+              <h3>Cambiá el texto, dejá la misma key</h3>
+              <p class="index__q">
+                Es un cliente con un bug: reusó la etiqueta para otro pedido.
+              </p>
+              <span class="index__contrast"
+                ><span>esperá: <b class="n">409, y no ejecuta nada</b></span></span
+              >
+            </span>
+          </button>
+
+          <button class="index__item try" type="button" data-try="key">
+            <span class="index__id">3</span>
+            <span class="index__body">
+              <h3>Mismo texto, key nueva</h3>
+              <p class="index__q">
+                Para el servidor esto es un pedido nuevo, aunque el texto sea idéntico.
+              </p>
+              <span class="index__contrast"
+                ><span>esperá: <b class="g">201… o un choque por otra regla</b></span></span
+              >
+            </span>
+          </button>
+
+          <button class="index__item try" type="button" data-try="actor">
+            <span class="index__id">4</span>
+            <span class="index__body">
+              <h3>Misma key, otro senderId</h3>
+              <p class="index__q">
+                La key está scopeada por actor: dos usuarios pueden elegir la misma sin
+                pisarse.
+              </p>
+              <span class="index__contrast"
+                ><span>esperá: <b class="g">no choca, es otra operación</b></span></span
+              >
+            </span>
+          </button>
+        </div>
+      </section>
+
+      <p class="footnote">
+        Este banco manda al camino <strong>protegido</strong>, el real. Para ver qué pasa sin
+        las constraints, andá a <a href="/idempotencia">idempotencia</a>. El
+        <code>fingerprint</code> lo calcula el servidor con la misma función que usa el envío,
+        así que lo que ves es el valor de verdad y no una copia.
+      </p>
+    </main>
+
+    <script type="module" src="/probar.js"></script>
+  </body>
+</html>

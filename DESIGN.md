@@ -84,6 +84,19 @@ se mueven al cambiar de profundidad; sólo crece o se contrae la prosa debajo.
 Existe porque el panel sirve a dos situaciones (aprender solo, mostrar a alguien) y una sola
 densidad falla en una de las dos.
 
+## Formularios
+
+El banco de pruebas es la única superficie con entrada de datos. Reglas:
+
+- Cada campo lleva una **pista de qué provoca cambiarlo**, no una descripción de qué es.
+  «repetila para reintentar · cambiala para que sea un pedido nuevo» enseña; «la clave de
+  idempotencia» no.
+- El request se previsualiza **tal como sale por la red**, con el valor editado resaltado.
+- Lo que el servidor deriva y no viaja en el request (`route`, `fingerprint`, la cadena
+  canónica) va en un bloque aparte, rotulado como tal.
+- Todo resultado explica **cuál regla actuó**, no sólo el status: el código HTTP por sí solo
+  no distingue si decidió la key o el fingerprint.
+
 ## Motion
 
 Un solo momento autorizado: cuando llega el resultado de una comparación, los números

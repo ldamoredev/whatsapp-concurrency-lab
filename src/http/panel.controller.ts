@@ -19,6 +19,7 @@ const PAGES: Record<string, string> = {
   '/idempotencia': 'idempotencia.html',
   '/orden': 'orden.html',
   '/entrega': 'entrega.html',
+  '/probar': 'probar.html',
   '/infra': 'infra.html',
 };
 
@@ -28,6 +29,7 @@ const ASSETS: Record<string, { file: string; type: string }> = {
   '/idempotencia.js': { file: 'idempotencia.js', type: 'text/javascript; charset=utf-8' },
   '/orden.js': { file: 'orden.js', type: 'text/javascript; charset=utf-8' },
   '/entrega.js': { file: 'entrega.js', type: 'text/javascript; charset=utf-8' },
+  '/probar.js': { file: 'probar.js', type: 'text/javascript; charset=utf-8' },
   '/infra.js': { file: 'infra.js', type: 'text/javascript; charset=utf-8' },
 };
 
@@ -35,7 +37,7 @@ const ASSETS: Record<string, { file: string; type: string }> = {
 export class PanelController {
   private readonly publicDir = resolvePublicDir();
 
-  @Get(['/', '/idempotencia', '/orden', '/entrega', '/infra'])
+  @Get(['/', '/idempotencia', '/orden', '/entrega', '/probar', '/infra'])
   page(@Res({ passthrough: true }) reply: FastifyReply): string {
     void reply.header('Content-Type', 'text/html; charset=utf-8');
     return this.read(PAGES[reply.request.url.split('?')[0]] ?? 'index.html');
@@ -47,6 +49,7 @@ export class PanelController {
     '/idempotencia.js',
     '/orden.js',
     '/entrega.js',
+    '/probar.js',
     '/infra.js',
   ])
   asset(@Res({ passthrough: true }) reply: FastifyReply): string {
