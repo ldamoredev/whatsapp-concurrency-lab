@@ -1262,3 +1262,208 @@ button.index__item:disabled {
     grid-template-columns: 1fr;
   }
 }
+
+/* ── fichas de concepto (portada) ───────────────────────────────────────── */
+
+.concept {
+  display: grid;
+  gap: 28px;
+}
+
+/* La definición es lo primero que se lee y lo único que crece. */
+.concept__def {
+  margin: 0;
+  font-size: 17px;
+  line-height: 1.6;
+  color: var(--text-dim);
+  max-width: 74ch;
+  padding-left: 14px;
+  border-left: 1px solid var(--accent);
+}
+
+.concept__def strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.concept__block {
+  display: grid;
+  gap: 12px;
+}
+
+.concept__h {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.concept__sub {
+  margin: 0 0 8px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--text-faint);
+}
+
+.concept__block--warn .concept__h {
+  color: var(--warn);
+}
+
+.concept__punch {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--text);
+}
+
+.concept__punch code {
+  color: var(--accent);
+}
+
+/* ── los tres casos indistinguibles ─────────────────────────────────────── */
+
+.cases {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 1px;
+  background: var(--line-soft);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+  max-width: 74ch;
+}
+
+.cases li {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 10px 14px;
+  background: var(--panel);
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+/* El caso 2 es el que rompe: se marca sin depender sólo del color. */
+.cases li:nth-child(2) {
+  background: var(--bad-bg);
+  color: var(--text);
+}
+
+.cases li:nth-child(2) em {
+  font-style: normal;
+  color: var(--bad);
+  font-weight: 600;
+}
+
+.cases__n {
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+  flex: none;
+}
+
+/* ── tabla de decisión ──────────────────────────────────────────────────── */
+
+.decision {
+  width: 100%;
+  max-width: 74ch;
+  border-collapse: collapse;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+  font-size: 12.5px;
+}
+
+.decision td {
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--panel);
+}
+
+.decision tr:last-child td {
+  border-bottom: 0;
+}
+
+.decision__q {
+  color: var(--text-dim);
+}
+
+.decision__a {
+  text-align: right;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
+.decision__a--yes {
+  color: var(--ok);
+  font-weight: 600;
+}
+
+/* ── caja de herramienta ────────────────────────────────────────────────── */
+
+.tool {
+  display: grid;
+  gap: 10px;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+.tool + .tool {
+  margin-top: 12px;
+}
+
+.tool__head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.tool__n {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--accent);
+  flex: none;
+}
+
+.tool__name {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.tool__when {
+  margin-left: auto;
+  font-size: 11.5px;
+  color: var(--text-faint);
+}
+
+.tool .code {
+  background: var(--bg);
+}
+
+.tool__note {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--text-dim);
+  max-width: 78ch;
+}
+
+.tool__note strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+@media (max-width: 700px) {
+  .tool__when {
+    margin-left: 0;
+    width: 100%;
+  }
+  .decision__a {
+    white-space: normal;
+  }
+}

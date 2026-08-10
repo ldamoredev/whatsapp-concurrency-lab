@@ -26,9 +26,9 @@
         </p>
         <p class="deep">
           Lo que hace distinto a este panel es que cada escenario se ejecuta
-          <strong>dos veces</strong>. Primero por el camino ingenuo —el código que uno
-          escribe cuando todavía no pensó en concurrencia, que se lee razonable y pasa el
-          code review— y después por el camino real del sistema. Misma entrada, misma base,
+          <strong>dos veces</strong>. Primero por el camino ingenuo —el código que uno escribe
+          cuando todavía no pensó en concurrencia, que se lee razonable y pasa el code
+          review— y después por el camino real del sistema. Misma entrada, misma base,
           resultados incomparables.
         </p>
         <p class="deep">
@@ -37,6 +37,282 @@
         </p>
       </div>
 
+      <!-- ══ IDEMPOTENCIA ═══════════════════════════════════════════════════ -->
+      <section class="section" id="idempotencia-concepto">
+        <h2>Idempotencia</h2>
+
+        <div class="concept">
+          <p class="concept__def">
+            Una operación es <strong>idempotente</strong> si ejecutarla muchas veces deja el
+            sistema igual que ejecutarla una sola vez.
+          </p>
+
+          <div class="concept__block">
+            <h3 class="concept__h">Qué problema resuelve</h3>
+            <div class="lede">
+              <p>
+                Tu request falla con timeout. No con un error claro: con silencio. Ahora estás
+                en una de tres situaciones y <strong>no podés distinguirlas</strong>:
+              </p>
+            </div>
+            <ol class="cases">
+              <li><span class="cases__n">1</span> no llegó al servidor</li>
+              <li>
+                <span class="cases__n">2</span> llegó, se ejecutó, y
+                <em>se perdió la respuesta</em>
+              </li>
+              <li><span class="cases__n">3</span> llegó y no se ejecutó</li>
+            </ol>
+            <div class="lede">
+              <p>
+                En <strong>1 y 3 hay que reintentar</strong>. En <strong>2, reintentar
+                duplica</strong> — cobrás dos veces, mandás el mensaje dos veces. La
+                idempotencia existe para que no tengas que distinguirlas: reintentás siempre y
+                el servidor decide.
+              </p>
+            </div>
+          </div>
+
+          <div class="concept__block">
+            <h3 class="concept__h">Cuándo recurrir a ella</h3>
+            <table class="decision">
+              <tbody>
+                <tr>
+                  <td class="decision__q">¿La operación crea o modifica algo?</td>
+                  <td class="decision__a">si no → no hace falta</td>
+                </tr>
+                <tr>
+                  <td class="decision__q">¿Ejecutarla dos veces hace daño real?</td>
+                  <td class="decision__a">si no → no hace falta</td>
+                </tr>
+                <tr>
+                  <td class="decision__q">¿El cliente puede reintentar, aunque sea a mano?</td>
+                  <td class="decision__a decision__a--yes">las tres sí → necesitás key</td>
+                </tr>
+              </tbody>
+            </table>
+            <div class="lede">
+              <p>
+                Casos típicos: cobrar un pago, crear un pedido, mandar un mensaje o un email,
+                descontar stock, transferir dinero.
+              </p>
+              <p class="deep">
+                <strong>Cuándo NO</strong>: <code>GET</code> no cambia nada;
+                <code>DELETE /users/123</code> borrado dos veces sigue siendo borrado;
+                <code>PUT</code> con el estado completo deja el mismo resultado final.
+              </p>
+              <p class="deep">
+                Y el atajo que casi nadie menciona: <strong>si el cliente elige el ID del
+                recurso</strong> —<code>PUT /orders/9f2c-4a1b</code>— entonces
+                <strong>ese ID ya es la key</strong>. Un <code>UNIQUE</code> sobre él hace
+                todo el trabajo y no hace falta agregar nada encima. Antes de meter
+                idempotency keys, preguntate si podés rediseñar el endpoint así.
+              </p>
+            </div>
+          </div>
+
+          <div class="concept__block">
+            <h3 class="concept__h">Cómo se resuelve, mínimo viable</h3>
+            <div class="code-pair">
+              <div>
+                <h4 class="concept__sub">la tabla</h4>
+                <pre class="code"><b>CREATE TABLE</b> idempotency_keys (
+  actor_id    uuid <b>NOT NULL</b>,
+  route       text <b>NOT NULL</b>,
+  key         text <b>NOT NULL</b>,
+  fingerprint text <b>NOT NULL</b>,  <i>-- hash del pedido</i>
+  response    jsonb,           <i>-- NULL = en curso</i>
+
+  <s>PRIMARY KEY (actor_id, route, key)</s>
+);</pre>
+              </div>
+              <div>
+                <h4 class="concept__sub">el flujo</h4>
+                <pre class="code"><i>1.</i> INSERT de la key   <i>← sin SELECT previo</i>
+
+<i>2.</i> ¿ganó el INSERT?
+     <s>sí</s> → ejecutá el efecto y guardá la
+          respuesta <s>en la misma transacción</s>
+
+     <u>no</u> → alguien llegó primero:
+          fingerprint distinto → <u>409</u>
+          hay respuesta       → devolvela
+          no hay todavía      → <u>409 en curso</u></pre>
+              </div>
+            </div>
+
+            <div class="lede" style="margin-top: 16px">
+              <p>
+                Dos decisiones cargan todo el peso. Primera: <strong>el INSERT es la
+                verificación</strong>. No hay un <code>SELECT</code> que pregunte «¿existe?»,
+                porque entre esa consulta y el INSERT hay una ventana por la que entran los
+                otros requests.
+              </p>
+              <p>
+                Segunda: <strong>la respuesta se guarda en la misma transacción que el
+                efecto</strong>. Si están separadas y el proceso muere en el medio, el pago
+                existe pero el reintento no encuentra nada que devolver.
+              </p>
+              <p class="deep">
+                El <code>fingerprint</code> es un hash canónico del pedido y responde otra
+                pregunta: si el cliente reusó la etiqueta para <em>otro</em> contenido.
+                Sin él, un cliente con un bug recibe la respuesta del pedido anterior creyendo
+                que el suyo se hizo. La <strong>key</strong> dice «es el mismo intento» y la
+                decide el cliente; el <strong>fingerprint</strong> dice «el cliente está
+                usando bien esa etiqueta» y lo verifica el servidor.
+              </p>
+            </div>
+          </div>
+
+          <div class="concept__block concept__block--warn">
+            <h3 class="concept__h">El error que se comete siempre</h3>
+            <pre class="code"><i>// ❌ parece una protección, no lo es</i>
+<b>const</b> existe = <b>await</b> db.query(<u>'SELECT ... WHERE key = $1'</u>);
+<b>if</b> (existe) <b>return</b> replay(existe);
+<b>await</b> db.query(<u>'INSERT ...'</u>);   <i>// ← entre las dos líneas entraron 59 requests</i></pre>
+            <div class="lede" style="margin-top: 12px">
+              <p>
+                En <code>READ COMMITTED</code> —el nivel por defecto de PostgreSQL— ninguna
+                transacción ve las filas no confirmadas de otra. Los 60 leen «no existe» y los
+                60 crean el registro.
+                <a href="/idempotencia">Correlo y mirá el número</a>: cambia en cada corrida.
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ══ CONCURRENCIA ═══════════════════════════════════════════════════ -->
+      <section class="section" id="concurrencia-concepto">
+        <h2>Concurrencia sobre estado compartido</h2>
+
+        <div class="concept">
+          <p class="concept__def">
+            Varios procesos, <strong>sin memoria compartida</strong>, tocando el mismo dato al
+            mismo tiempo. Ninguno sabe qué están haciendo los otros.
+          </p>
+
+          <div class="concept__block">
+            <h3 class="concept__h">Por qué no alcanza con escribir con cuidado</h3>
+            <div class="lede">
+              <p>
+                Todo bug de concurrencia tiene la misma forma: <strong>una ventana entre leer
+                y escribir</strong>.
+              </p>
+              <pre class="code">t0  proceso A  <b>lee</b>   saldo = 100
+t1  proceso B  <b>lee</b>   saldo = 100    <u>← nadie hizo nada mal</u>
+t2  proceso A  <b>escribe</b> saldo = 90
+t3  proceso B  <b>escribe</b> saldo = 90   <u>← se perdió un descuento</u></pre>
+              <p>
+                Con un solo proceso no pasa nunca. Con tres réplicas pasa a veces — y «a
+                veces» es lo peor que le puede pasar a un bug: pasa el code review, no aparece
+                en desarrollo, y llega a producción.
+              </p>
+              <p class="deep">
+                Un <code>mutex</code> en memoria no sirve: cada réplica tiene el suyo. Redis
+                tampoco resuelve el fondo, agrega una segunda autoridad que puede desincronizarse
+                con la base. <strong>La coordinación correcta va donde ya está el dato.</strong>
+              </p>
+            </div>
+          </div>
+
+          <div class="concept__block">
+            <h3 class="concept__h">Las cuatro herramientas, y cuándo usar cada una</h3>
+
+            <div class="tool">
+              <div class="tool__head">
+                <span class="tool__n">1</span>
+                <h4 class="tool__name">Constraint única</h4>
+                <span class="tool__when">cuando la regla es «no puede haber dos»</span>
+              </div>
+              <pre class="code"><s>UNIQUE (actor_id, route, key)</s>
+<i>-- el INSERT falla con 23505 y ESE error es la respuesta útil</i></pre>
+              <p class="tool__note">
+                La más barata y la más fuerte: no hay ventana posible porque la decisión y la
+                escritura son el mismo acto. <strong>Si tu regla se puede expresar como
+                unicidad, empezá acá.</strong> Sirve incluso si la aplicación tiene un bug.
+              </p>
+            </div>
+
+            <div class="tool">
+              <div class="tool__head">
+                <span class="tool__n">2</span>
+                <h4 class="tool__name">Lock pesimista</h4>
+                <span class="tool__when">cuando hay que leer, calcular y escribir</span>
+              </div>
+              <pre class="code"><b>SELECT</b> next_sequence <b>FROM</b> counters
+ <b>WHERE</b> id = $1 <s>FOR UPDATE</s>;   <i>-- nadie más pasa hasta el COMMIT</i></pre>
+              <p class="tool__note">
+                Para «dame el siguiente número» no hay atajo: alguien tiene que esperar.
+                Serializa, así que el lock debe ser <strong>lo más chico posible</strong> (una
+                fila, no una tabla) y la transacción lo más corta posible.
+                <strong>Regla de oro:</strong> si tomás más de un lock, tomalos siempre en el
+                mismo orden en todo el código, o vas a tener deadlocks.
+              </p>
+            </div>
+
+            <div class="tool">
+              <div class="tool__head">
+                <span class="tool__n">3</span>
+                <h4 class="tool__name">Update condicional</h4>
+                <span class="tool__when">cuando la condición se puede escribir en SQL</span>
+              </div>
+              <pre class="code"><b>UPDATE</b> receipts <b>SET</b> state = <s>'read'</s>, version = version + 1
+ <b>WHERE</b> id = $1 <s>AND version = $2</s>          <i>-- compare-and-set</i>
+   <s>AND rank(state) &lt; rank('read')</s>;      <i>-- sólo avanza</i>
+
+<i>-- ¿0 filas actualizadas? no es un error: es la respuesta correcta</i></pre>
+              <p class="tool__note">
+                No bloquea a nadie. La condición viaja <strong>en el
+                <code>WHERE</code></strong>, no en un <code>if</code> de la aplicación, así
+                que se evalúa en el mismo instante que la escritura. Ideal para máquinas de
+                estado que sólo avanzan y para <em>fencing</em>: un proceso viejo que revive
+                actualiza 0 filas y no hace daño.
+              </p>
+            </div>
+
+            <div class="tool">
+              <div class="tool__head">
+                <span class="tool__n">4</span>
+                <h4 class="tool__name">Transacción</h4>
+                <span class="tool__when">cuando varios efectos son indivisibles</span>
+              </div>
+              <pre class="code"><b>BEGIN</b>;  <i>-- todo lo de adentro es invisible para los demás</i>
+  <i>… mensaje, contador, snapshot de entrega, respuesta …</i>
+<b>COMMIT</b>;  <i>-- aparece todo junto, o no aparece nada</i></pre>
+              <p class="tool__note">
+                No es una herramienta de exclusión: es de <strong>atomicidad</strong>. Su
+                superpoder es que elimina los estados intermedios observables — y con eso
+                elimina la pregunta «¿me quedé a la mitad?», que es la que obliga a escribir
+                lógica de recuperación.
+              </p>
+            </div>
+          </div>
+
+          <div class="concept__block concept__block--warn">
+            <h3 class="concept__h">La regla que resume las cuatro</h3>
+            <p class="concept__punch">
+              Poné la decisión en el <code>WHERE</code>, no en un <code>if</code>.
+            </p>
+            <div class="lede">
+              <p>
+                Un <code>if</code> en la aplicación se evalúa con datos que ya podrían estar
+                viejos. Una condición dentro del <code>WHERE</code> se evalúa en el mismo
+                instante que la escritura, sobre la fila bloqueada. Esa distancia —de
+                milisegundos— es todo el problema.
+              </p>
+              <p class="deep">
+                Corolario práctico: <strong>«0 filas afectadas» es información, no un
+                fallo.</strong> Significa «alguien llegó antes» o «esto ya estaba hecho», y
+                casi siempre la respuesta correcta es leer lo que hizo el otro, no reintentar
+                a ciegas.
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ══ EL LABORATORIO ═════════════════════════════════════════════════ -->
       <section class="section">
         <h2>Réplicas</h2>
         <div class="replicas" id="replicas"></div>
@@ -49,13 +325,29 @@
       <section class="section">
         <h2>Escenarios</h2>
         <div class="index">
+          <a class="index__item" href="/probar">
+            <span class="index__id">empezá acá</span>
+            <span class="index__body">
+              <h3>Banco de pruebas</h3>
+              <p class="index__q">
+                Un request por vez, con todos los valores a la vista y editables. Muestra cuál
+                de las dos reglas actuó y por qué.
+              </p>
+              <span class="index__contrast">
+                <span>la key la decide <b>el cliente</b></span>
+                <span>el fingerprint lo verifica <b>el servidor</b></span>
+              </span>
+            </span>
+            <span class="index__go" aria-hidden="true">→</span>
+          </a>
+
           <a class="index__item" href="/idempotencia">
             <span class="index__id">I1 · I2</span>
             <span class="index__body">
               <h3>Idempotencia</h3>
               <p class="index__q">
-                El cliente pierde la respuesta y reintenta. ¿Cómo sabe el servidor que es el
-                mismo pedido y no uno nuevo?
+                El cliente pierde la respuesta y reintenta. 60 requests concurrentes con la
+                misma key, repartidos entre las tres réplicas.
               </p>
               <span class="index__contrast">
                 <span>sin protección → <b class="n">decenas de mensajes</b></span>
@@ -90,7 +382,7 @@
                 progreso sin contar de más?
               </p>
               <span class="index__contrast">
-                <span>sin protección → <b class="n">progreso 20 de 3</b></span>
+                <span>sin protección → <b class="n">progreso 21 de 3</b></span>
                 <span>con protección → <b class="g">3 de 3</b></span>
               </span>
             </span>
@@ -114,26 +406,37 @@
         </div>
       </section>
 
+      <!-- ══ PARA CONTARLO ══════════════════════════════════════════════════ -->
       <section class="section deep">
-        <h2>Lo que este laboratorio no demuestra</h2>
+        <h2>Para contarlo en 90 segundos</h2>
         <div class="lede">
-          <p>
-            PostgreSQL corre con una sola instancia: esto prueba consistencia de aplicación,
-            <strong>no</strong> alta disponibilidad de la base ni tolerancia de zona. Todavía
-            no hay Kubernetes, ni carga sostenida medida, ni inyección de fallos de red.
+          <p class="concept__punch" style="margin-bottom: 14px">
+            «Un cliente puede perder la respuesta y reintentar contra otra réplica. Varios
+            dispositivos pueden confirmar al mismo tiempo. Aun así se crea
+            <strong>un solo</strong> mensaje lógico, el estado <strong>sólo avanza</strong> y
+            el orden <strong>se conserva</strong>.»
           </p>
           <p>
-            Tampoco hay balanceador: cada réplica expone su propio puerto y el reparto lo
-            hace esta página. Con Traefik eso deja de hacer falta.
+            Y después, el mecanismo: <strong>la corrección no vive en la memoria de un
+            proceso, porque hay tres.</strong> Vive en constraints, locks y updates
+            condicionales de PostgreSQL. Cada afirmación se verifica consultando la base al
+            final — contar respuestas <code>2xx</code> no demuestra ninguna de estas
+            propiedades.
+          </p>
+          <p>
+            Si te preguntan por los límites, la respuesta honesta: PostgreSQL corre con una
+            sola instancia, así que esto prueba consistencia de aplicación,
+            <strong>no</strong> alta disponibilidad de la base ni tolerancia de zona. Todavía
+            no hay Kubernetes ni carga sostenida medida. Tampoco hay balanceador: cada réplica
+            expone su puerto y el reparto lo hace esta página.
           </p>
         </div>
       </section>
 
       <p class="footnote">
-        Escenarios y estado se apoyan en consultas contra la base, no en respuestas HTTP.
-        Contar <code>2xx</code> no demostraría ninguna de estas propiedades. El botón
-        <em>reiniciar</em> de cada escenario trunca las tablas: es la funcionalidad, no un
-        riesgo. Se apaga con <code>LAB_PANEL_ENABLED=false</code>.
+        Escenarios y estado se apoyan en consultas contra la base, no en respuestas HTTP. El
+        botón <em>reiniciar</em> de cada escenario trunca las tablas: es la funcionalidad, no
+        un riesgo. Se apaga con <code>LAB_PANEL_ENABLED=false</code>.
       </p>
     </main>
 

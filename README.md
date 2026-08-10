@@ -42,6 +42,13 @@ npm run stack:up
 
 Y abrir **http://localhost:3001**.
 
+La **portada** explica los dos conceptos con la profundidad que hace falta para contarlos en
+una entrevista: qué es la idempotencia, qué problema resuelve, cuándo recurrir a ella —y
+cuándo no—, y el mínimo viable para implementarla. Después lo mismo con la concurrencia
+sobre estado compartido: por qué no alcanza con escribir con cuidado, y las cuatro
+herramientas (constraint única, lock pesimista, update condicional, transacción) con el
+criterio para elegir entre ellas.
+
 Cada escenario **corre dos veces**, con la misma entrada y contra la misma base: primero por
 el camino ingenuo —el que uno escribe cuando todavía no pensó en concurrencia— y después por
 el camino real. Los requests salen del navegador hacia las tres réplicas; si los orquestara
