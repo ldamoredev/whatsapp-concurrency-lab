@@ -22,7 +22,7 @@ afterAll(async () => {
 describe('el panel se sirve desde la propia API', () => {
   it('sirve una pagina por escenario', async () => {
     for (const [ruta, titulo] of [
-      ['/', 'Tres procesos'],
+      ['/', 'Idempotencia y concurrencia para entrevistas'],
       ['/idempotencia', 'Idempotencia'],
       ['/probar', 'Banco de pruebas'],
       ['/orden', 'Orden y huecos'],

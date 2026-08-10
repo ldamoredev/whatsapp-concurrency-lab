@@ -161,6 +161,7 @@ a {
   display: flex;
   align-items: center;
   gap: 10px;
+  flex-wrap: wrap;
 }
 
 /* ── verificación de invariantes ────────────────────────────────────────── */
@@ -294,6 +295,94 @@ a {
   text-transform: uppercase;
   letter-spacing: 0.09em;
   color: var(--text-faint);
+}
+
+/* ── mapa mental de entrevista (portada) ────────────────────────────────── */
+
+.interview-map {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 1px minmax(0, 1fr);
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.interview-map__side {
+  padding: 22px 24px 24px;
+}
+
+.interview-map__side:first-child {
+  padding-left: 0;
+}
+
+.interview-map__side:last-child {
+  padding-right: 0;
+}
+
+.interview-map__rule {
+  background: var(--line);
+}
+
+.interview-map__prompt {
+  margin: 0 0 8px;
+  color: var(--text-faint);
+  font-size: 11px;
+}
+
+.interview-map__side h3 {
+  margin: 0 0 10px;
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.interview-map__side p:not(.interview-map__prompt) {
+  max-width: 62ch;
+  margin: 0 0 14px;
+  color: var(--text-dim);
+  line-height: 1.7;
+}
+
+.interview-map__side strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.interview-map__side a {
+  color: var(--accent);
+  font-size: 12px;
+  text-underline-offset: 3px;
+}
+
+.interview-map__thesis {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 14px 0;
+  border-top: 1px solid var(--line);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.65;
+  max-width: var(--measure);
+}
+
+@media (max-width: 760px) {
+  .interview-map {
+    grid-template-columns: 1fr;
+  }
+
+  .interview-map__side,
+  .interview-map__side:first-child,
+  .interview-map__side:last-child {
+    padding: 18px 0;
+  }
+
+  .interview-map__rule {
+    width: 100%;
+    height: 1px;
+  }
+
+  .interview-map__thesis {
+    grid-column: 1;
+  }
 }
 
 /* ── entrada del experimento ────────────────────────────────────────────── */
@@ -945,6 +1034,10 @@ table.tbl .empty td {
   }
   .top {
     padding: 10px 14px;
+  }
+  .top__right {
+    width: 100%;
+    margin-left: 0;
   }
   .verdict__number {
     font-size: 32px;

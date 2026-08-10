@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>whatsapp-concurrency-lab</title>
+    <title>Idempotencia y concurrencia · whatsapp-concurrency-lab</title>
     <link rel="stylesheet" href="/panel.css" />
     <link
       rel="icon"
@@ -15,36 +15,26 @@
 
     <main class="page">
       <div class="lede">
-        <h1>Tres procesos, una sola verdad</h1>
+        <h1>Idempotencia y concurrencia para entrevistas</h1>
         <p class="question">
-          ¿Qué impide que dos réplicas creen el mismo mensaje dos veces?
+          Dos problemas clásicos de entrevista que parecen iguales y no lo son.
         </p>
         <p>
-          Este laboratorio corre <strong>tres réplicas</strong> de una API de mensajería, con
-          memorias separadas y una sola base de datos. Cada escenario provoca una carrera de
-          verdad: los requests salen de tu navegador hacia las tres.
-        </p>
-        <p class="deep">
-          Lo que hace distinto a este panel es que cada escenario se ejecuta
-          <strong>dos veces</strong>. Primero por el camino ingenuo —el código que uno escribe
-          cuando todavía no pensó en concurrencia, que se lee razonable y pasa el code
-          review— y después por el camino real del sistema. Misma entrada, misma base,
-          resultados incomparables.
-        </p>
-        <p class="deep">
-          Una constraint no se entiende por lo que permite. Se entiende por el desastre que
-          impide.
+          Este laboratorio nació para responder una pregunta concreta: <strong>cómo evitar
+          duplicar un pago</strong> y <strong>cómo evitar vender más stock del disponible</strong>.
+          El chat es sólo el vocabulario; el tema real es cómo coordinar reintentos y escrituras
+          concurrentes sobre estado compartido.
         </p>
       </div>
 
 
       <!-- ══ LA RESPUESTA DE ENTREVISTA ═════════════════════════════════════ -->
       <section class="section" id="respuesta">
-        <h2>La respuesta, en 60 segundos</h2>
+        <h2>Respuesta de entrevista, en 60 segundos</h2>
 
         <div class="answer">
           <p class="answer__q">
-            «¿Cómo manejarías el stock y la concurrencia en un checkout?»
+            «¿Cómo manejarías la concurrencia en el stock y la idempotencia en el pago?»
           </p>
 
           <div class="answer__step">
@@ -74,9 +64,9 @@
               <p>
                 «Si devuelve <strong>0 filas</strong>, no había stock — y eso no es un error,
                 es la respuesta de negocio. Lee, compara y descuenta en un solo acto atómico,
-                sin bloquear a nadie. Debajo dejo un <code>CHECK (stock &gt;= 0)</code> como
-                red: si algún día alguien escribe la resta sin la condición, la base grita en
-                vez de dejar stock negativo.»
+                sin un <code>SELECT</code> previo ni una ventana intermedia. PostgreSQL igual toma
+                el lock de la fila mientras escribe: si ese producto está caliente, los updates
+                compiten ahí. Debajo dejo un <code>CHECK (stock &gt;= 0)</code> como red.»
               </p>
             </div>
           </div>
@@ -112,10 +102,11 @@
             <div>
               <h3 class="answer__h">Lo que cierra la respuesta</h3>
               <p class="answer__punch">
-                «En los dos casos el patrón es el mismo: <strong>la decisión va en el
-                <code>WHERE</code>, no en un <code>if</code> de la aplicación.</strong> Si está
-                en el código, se evalúa con datos que ya pueden estar viejos; si está en el
-                <code>WHERE</code>, se evalúa en el mismo instante que la escritura.»
+                «En los dos casos la decisión tiene que ser <strong>atómica y vivir donde está el
+                dato</strong>: para stock es un <code>UPDATE ... WHERE stock &gt;= cantidad</code>;
+                para idempotencia es un <code>INSERT</code> contra
+                <code>UNIQUE (actor, ruta, key)</code>, evitando leer, decidir en un
+                <code>if</code> y escribir después.»
               </p>
               <p>
                 «Y no lo pongo en memoria ni en Redis porque tengo varias réplicas: cada una
@@ -156,9 +147,10 @@
                     ¿Por qué no <code>SELECT … FOR UPDATE</code> para el stock?
                   </td>
                   <td class="protocol__break">
-                    Funciona, pero serializa a todos los que compran ese producto. El lock hace
-                    falta cuando tenés que leer, decidir algo que no cabe en un
-                    <code>WHERE</code>, y después escribir — como asignar un número de orden.
+                    Funciona. El update condicional también toma un lock de fila, pero evita el
+                    viaje previo de lectura y mantiene condición y escritura en una sentencia.
+                    El <code>FOR UPDATE</code> hace falta cuando la decisión no cabe en el
+                    <code>WHERE</code> — por ejemplo, asignar el próximo número de orden.
                   </td>
                 </tr>
                 <tr>
@@ -190,6 +182,36 @@
         </div>
       </section>
 
+      <section class="section" aria-labelledby="mapa-mental">
+        <h2 id="mapa-mental">El mapa mental</h2>
+        <div class="interview-map">
+          <div class="interview-map__side">
+            <p class="interview-map__prompt">El mismo cliente repite la misma operación</p>
+            <h3>Idempotencia</h3>
+            <p>
+              La pregunta es <strong>«¿esto ya se ejecutó?»</strong>. La protección central es
+              reclamar una key durable con un <code>INSERT</code> contra una constraint única y
+              persistir el resultado para poder reproducirlo.
+            </p>
+            <a href="#idempotencia-concepto">Entender el protocolo completo →</a>
+          </div>
+          <div class="interview-map__rule" aria-hidden="true"></div>
+          <div class="interview-map__side">
+            <p class="interview-map__prompt">Varios procesos modifican el mismo estado</p>
+            <h3>Concurrencia</h3>
+            <p>
+              La pregunta es <strong>«¿qué pasa si llegan juntos?»</strong>. La protección se
+              elige por invariante: constraint, lock de fila, update condicional o transacción.
+            </p>
+            <a href="#concurrencia-concepto">Elegir la herramienta correcta →</a>
+          </div>
+        </div>
+        <p class="interview-map__thesis">
+          Regla común: la base decide en el mismo acto que escribe. La aplicación interpreta si
+          ganó, perdió o no había nada que cambiar.
+        </p>
+      </section>
+
       <!-- ══ IDEMPOTENCIA ═══════════════════════════════════════════════════ -->
       <section class="section" id="idempotencia-concepto">
         <h2>Idempotencia</h2>
@@ -204,7 +226,7 @@
             <h3 class="concept__h">Qué problema resuelve</h3>
             <div class="lede">
               <p>
-                Tu request falla con timeout. No con un error claro: con silencio. Ahora estás
+                Tu request falla con timeout: no con un error claro, sino con silencio. Ahora estás
                 en una de tres situaciones y <strong>no podés distinguirlas</strong>:
               </p>
             </div>
@@ -247,7 +269,7 @@
             <div class="lede">
               <p>
                 Casos típicos: cobrar un pago, crear un pedido, mandar un mensaje o un email,
-                descontar stock, transferir dinero.
+                crear una reserva de stock o transferir dinero.
               </p>
               <p class="deep">
                 <strong>Cuándo NO</strong>: <code>GET</code> no cambia nada;
@@ -298,9 +320,8 @@
             <div class="lede" style="margin-top: 16px">
               <p>
                 Dos decisiones cargan todo el peso. Primera: <strong>el INSERT es la
-                verificación</strong>. No hay un <code>SELECT</code> que pregunte «¿existe?»,
-                porque entre esa consulta y el INSERT hay una ventana por la que entran los
-                otros requests.
+                verificación</strong>, sin un <code>SELECT</code> que pregunte «¿existe?», porque
+                entre esa consulta y el INSERT hay una ventana por la que entran los otros requests.
               </p>
               <p>
                 Segunda: <strong>la respuesta se guarda en la misma transacción que el
@@ -435,8 +456,8 @@
                     <strong>TTL</strong> y barrido de las keys viejas
                   </td>
                   <td class="protocol__break">
-                    La tabla crece para siempre. No es una falla de corrección, es una de
-                    operación — y aparece a los seis meses.
+                    La tabla crece para siempre; no es una falla de corrección, sino de operación,
+                    y aparece a los seis meses.
                   </td>
                 </tr>
                 <tr>
@@ -492,7 +513,9 @@
                 <a href="/idempotencia">Correlo y mirá el número</a>: cambia en cada corrida.
               </p>
             </div>
-          </div>          <div class="concept__block concept__block--warn">
+          </div>
+
+          <div class="concept__block concept__block--warn">
             <h3 class="concept__h">El límite: cuando el efecto sale de la base</h3>
             <div class="lede">
               <p>
@@ -620,11 +643,10 @@ t3  proceso B  <b>escribe</b> saldo = 90   <u>← se perdió un descuento</u></p
 
 <i>-- ¿0 filas actualizadas? no es un error: es la respuesta correcta</i></pre>
               <p class="tool__note">
-                No bloquea a nadie. La condición viaja <strong>en el
-                <code>WHERE</code></strong>, no en un <code>if</code> de la aplicación, así
-                que se evalúa en el mismo instante que la escritura. Ideal para máquinas de
-                estado que sólo avanzan y para <em>fencing</em>: un proceso viejo que revive
-                actualiza 0 filas y no hace daño.
+                No necesita un <code>SELECT ... FOR UPDATE</code> previo. Como toda escritura,
+                toma brevemente el lock de la fila; la ventaja es que la condición viaja
+                <strong>en el <code>WHERE</code></strong> y se evalúa en el mismo acto que el
+                cambio. Es ideal para máquinas de estado monotónicas y para <em>fencing</em>.
               </p>
             </div>
 
@@ -679,7 +701,7 @@ t3  proceso B  <b>escribe</b> saldo = 90   <u>← se perdió un descuento</u></p
    <s>AND stock &gt;= 1</s>;   <i>← la condición va acá</i>
 
 <i>-- ¿0 filas? no había stock.</i>
-<i>-- Sin lock, sin ventana, sin serializar.</i>
+<i>-- Sin SELECT previo ni ventana read/if/write.</i>
 
 <s>CHECK (stock &gt;= 0)</s>  <i>-- la red debajo</i></pre>
               </div>
@@ -688,7 +710,7 @@ t3  proceso B  <b>escribe</b> saldo = 90   <u>← se perdió un descuento</u></p
             <div class="lede" style="margin-top: 16px">
               <p>
                 El <code>UPDATE</code> condicional lee, decide y escribe en un solo acto
-                atómico. No hay instante entre la comparación y la resta.
+                atómico, sin un instante entre la comparación y la resta.
                 <strong>«0 filas afectadas» es la respuesta de negocio</strong>: no hay stock.
               </p>
               <p class="deep">
@@ -715,10 +737,10 @@ t3  proceso B  <b>escribe</b> saldo = 90   <u>← se perdió un descuento</u></p
                     ¿Por qué no <code>SELECT … FOR UPDATE</code>?
                   </td>
                   <td class="protocol__break">
-                    Funciona, pero serializa a todos los que compran ese producto. El update
-                    condicional no bloquea a nadie. <strong>El lock hace falta cuando tenés que
-                    leer, decidir algo que no cabe en un <code>WHERE</code>, y después
-                    escribir.</strong>
+                    Funciona. Ambos caminos compiten por el lock de esa fila; el update
+                    condicional evita el <code>SELECT</code> previo y mantiene la decisión en una
+                    sentencia. <strong>Usá <code>FOR UPDATE</code> cuando necesites leer y decidir
+                    algo que no cabe en un <code>WHERE</code>.</strong>
                   </td>
                 </tr>
                 <tr>
@@ -766,8 +788,8 @@ t3  proceso B  <b>escribe</b> saldo = 90   <u>← se perdió un descuento</u></p
                   <td class="protocol__step"><code>READ COMMITTED</code><br /><span class="protocol__tag">default en PostgreSQL</span></td>
                   <td class="protocol__break">lecturas sucias</td>
                   <td class="protocol__break">
-                    nada — pero <strong>el lost update sigue siendo posible</strong>, y por eso
-                    existen las cuatro herramientas de arriba
+                    permite alta concurrencia, pero <strong>el lost update sigue siendo
+                    posible</strong>; las invariantes necesitan las herramientas de arriba
                   </td>
                 </tr>
                 <tr>
@@ -799,9 +821,10 @@ t3  proceso B  <b>escribe</b> saldo = 90   <u>← se perdió un descuento</u></p
                 La respuesta buena a «¿qué nivel usarías?» no es un nivel: es
                 <strong>«depende del camino, y lo mediría»</strong>.
                 <code>READ COMMITTED</code> con constraints y updates condicionales cubre la
-                mayoría de los casos y no tiene costo. <code>SERIALIZABLE</code> con reintento
-                se justifica cuando la invariante involucra <em>varias filas</em> y no se puede
-                expresar en un solo <code>WHERE</code> — el caso del write skew.
+                mayoría de los casos de este laboratorio sin subir el aislamiento global.
+                <code>SERIALIZABLE</code> con reintento se justifica cuando la invariante
+                involucra <em>varias filas</em> y no se puede expresar en una operación atómica —
+                el caso del write skew.
               </p>
             </div>
           </div>
@@ -809,14 +832,14 @@ t3  proceso B  <b>escribe</b> saldo = 90   <u>← se perdió un descuento</u></p
           <div class="concept__block concept__block--warn">
             <h3 class="concept__h">La regla que resume las cuatro</h3>
             <p class="concept__punch">
-              Poné la decisión en el <code>WHERE</code>, no en un <code>if</code>.
+              Poné la decisión en la escritura atómica, no en un <code>if</code> previo.
             </p>
             <div class="lede">
               <p>
-                Un <code>if</code> en la aplicación se evalúa con datos que ya podrían estar
-                viejos. Una condición dentro del <code>WHERE</code> se evalúa en el mismo
-                instante que la escritura, sobre la fila bloqueada. Esa distancia —de
-                milisegundos— es todo el problema.
+                Puede ser una constraint que decide un <code>INSERT</code>, una condición en el
+                <code>WHERE</code> o un <code>FOR UPDATE</code> que ordena una decisión compleja.
+                Lo que no sirve es leer, decidir en la aplicación y escribir después con datos
+                que ya podrían estar viejos.
               </p>
               <p class="deep">
                 Corolario práctico: <strong>«0 filas afectadas» es información, no un
@@ -922,7 +945,7 @@ t3  proceso B  <b>escribe</b> saldo = 90   <u>← se perdió un descuento</u></p
 
       <!-- ══ PARA CONTARLO ══════════════════════════════════════════════════ -->
       <section class="section deep">
-        <h2>Para contarlo en 90 segundos</h2>
+        <h2>Cómo cerrar la explicación</h2>
         <div class="lede">
           <p class="concept__punch" style="margin-bottom: 14px">
             «Un cliente puede perder la respuesta y reintentar contra otra réplica. Varios
@@ -938,11 +961,16 @@ t3  proceso B  <b>escribe</b> saldo = 90   <u>← se perdió un descuento</u></p
             propiedades.
           </p>
           <p>
-            Si te preguntan por los límites, la respuesta honesta: PostgreSQL corre con una
-            sola instancia, así que esto prueba consistencia de aplicación,
-            <strong>no</strong> alta disponibilidad de la base ni tolerancia de zona. Todavía
-            no hay Kubernetes ni carga sostenida medida. Tampoco hay balanceador: cada réplica
-            expone su puerto y el reparto lo hace esta página.
+            Si te preguntan por la evidencia: en Kubernetes hay tres pods detrás de Traefik y
+            una sola URL; una corrida real repartió requests entre los tres y dejó un solo
+            mensaje en PostgreSQL. En Compose, la página reparte entre tres puertos porque ahí
+            no hay balanceador.
+          </p>
+          <p>
+            Si te preguntan por los límites: PostgreSQL sigue siendo una sola instancia. Esto
+            prueba consistencia de aplicación y routing multi-réplica, <strong>no</strong> alta
+            disponibilidad de la base, tolerancia de zona, capacidad sostenida ni recuperación
+            ante pod-kill o una base degradada. Esos escenarios siguen pendientes.
           </p>
         </div>
       </section>
@@ -967,10 +995,6 @@ t3  proceso B  <b>escribe</b> saldo = 90   <u>← se perdió un descuento</u></p
           ? 'Detrás del ingress hay una sola URL: no se puede preguntar pod por pod. Las réplicas aparecen acá a medida que atienden requests, identificadas por su X-Instance-Id — que es lo que un cliente real puede observar.'
           : 'Las tres sirven esta misma página. Si una se cae, el panel sigue: la API no guarda nada en memoria.';
 
-      document.getElementById('lb-note').innerHTML =
-        MODE === 'ingress'
-          ? 'El reparto lo hace <strong>Traefik</strong>, contra una sola URL y sin sticky sessions. Esta página no elige a qué réplica va cada request.'
-          : 'Tampoco hay balanceador: cada réplica expone su propio puerto y el reparto lo hace <strong>esta página</strong>. Detrás de un ingress eso deja de hacer falta.';
       void pollReplicas();
       setInterval(() => void pollReplicas(), 3000);
     </script>
