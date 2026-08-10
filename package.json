@@ -29,7 +29,13 @@
     "stack:up": "docker compose up -d --build --wait",
     "stack:down": "docker compose down",
     "stack:logs": "docker compose logs -f api-1 api-2 api-3",
-    "demo:replicas": "tsx scripts/demo-replicas.ts"
+    "demo:replicas": "tsx scripts/demo-replicas.ts",
+    "cluster:up": "bash scripts/k8s/cluster-up.sh",
+    "cluster:down": "bash scripts/k8s/cluster-down.sh",
+    "k8s:build": "bash scripts/k8s/build.sh",
+    "k8s:deploy": "bash scripts/k8s/deploy.sh",
+    "k8s:smoke": "bash scripts/k8s/smoke.sh",
+    "k8s:forward": "kubectl -n whatsapp-lab port-forward svc/api 8080:80"
   },
   "dependencies": {
     "@nestjs/common": "^11.1.6",

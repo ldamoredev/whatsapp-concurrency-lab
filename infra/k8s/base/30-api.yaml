@@ -1,0 +1,105 @@
+# API: tres replicas sin estado.
+#
+# Traduccion de los servicios api-1/2/3 de docker-compose. Alla eran tres servicios
+# con INSTANCE_ID fijo; aca es un Deployment con replicas: 3 y el INSTANCE_ID sale
+# del nombre del pod, que es el identificador natural en Kubernetes.
+apiVersion: v1
+kind: Service
+metadata:
+  name: api
+  namespace: whatsapp-lab
+spec:
+  type: ClusterIP
+  selector:
+    app: api
+  ports:
+    - name: http
+      port: 80
+      targetPort: 3000
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  namespace: whatsapp-lab
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: api
+  template:
+    metadata:
+      labels:
+        app: api
+    spec:
+      # El drenaje ordenado necesita su tiempo: readiness baja, se espera
+      # DRAIN_DELAY_MS a que el balanceador saque al pod de rotacion, y recien
+      # entonces se cierra el pool. Si el grace period fuera menor, Kubernetes
+      # mandaria SIGKILL a mitad del drenaje.
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+      containers:
+        - name: api
+          image: whatsapp-concurrency-lab:v1
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 3000
+          # ORDEN IMPORTANTE: $(VAR) solo resuelve variables declaradas ANTES.
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef: { name: lab-postgres, key: POSTGRES_USER }
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: lab-postgres, key: POSTGRES_PASSWORD }
+            - name: POSTGRES_DB
+              valueFrom:
+                configMapKeyRef: { name: lab-config, key: POSTGRES_DB }
+            - name: DATABASE_URL
+              value: postgres://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@postgres:5432/$(POSTGRES_DB)
+            # El nombre del pod es la identidad de replica. Es la evidencia de que
+            # el trafico se repartio; existe solo para el laboratorio.
+            - name: INSTANCE_ID
+              valueFrom:
+                fieldRef: { fieldPath: metadata.name }
+          envFrom:
+            - configMapRef:
+                name: lab-config
+          # Las tres probes contestan preguntas DISTINTAS. Ver src/http/health.controller.ts.
+          startupProbe:
+            # La unica que toca la base. Mientras falla, liveness y readiness no
+            # corren: protege un arranque lento de un reinicio prematuro.
+            httpGet: { path: /health/startup, port: http }
+            periodSeconds: 3
+            failureThreshold: 20
+          livenessProbe:
+            # NO consulta la base a proposito: una base lenta es una dependencia
+            # compartida, y reiniciar las tres replicas no la arregla.
+            httpGet: { path: /health/live, port: http }
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet: { path: /health/ready, port: http }
+            periodSeconds: 3
+            timeoutSeconds: 3
+            failureThreshold: 2
+          resources:
+            requests: { cpu: 100m, memory: 192Mi }
+            limits: { cpu: '1', memory: 512Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ['ALL']
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

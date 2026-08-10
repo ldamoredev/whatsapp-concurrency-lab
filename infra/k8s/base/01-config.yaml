@@ -1,0 +1,42 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: lab-config
+  namespace: whatsapp-lab
+data:
+  # Traduccion directa de docker-compose.yml. Los valores no se reinventan acá:
+  # si divergen entre Compose y Kubernetes, el laboratorio deja de probar lo mismo
+  # en los dos lados.
+  DATABASE_POOL_MAX: '10'
+  DATABASE_CONNECTION_TIMEOUT_MS: '5000'
+  DATABASE_STATEMENT_TIMEOUT_MS: '10000'
+  PORT: '3000'
+  DRAIN_DELAY_MS: '5000'
+  GAP_TIMEOUT_MS: '10000'
+  IDEMPOTENCY_LEASE_MS: '30000'
+  POSTGRES_DB: whatsapp_lab
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: lab-postgres
+  namespace: whatsapp-lab
+type: Opaque
+stringData:
+  # CREDENCIALES DE LABORATORIO, no secretas. Estan en el repo a proposito para que
+  # `cluster-up` funcione sin pasos manuales. En cualquier despliegue que no sea este
+  # lab, esto viene de un gestor de secretos y no del control de versiones.
+  POSTGRES_USER: lab
+  POSTGRES_PASSWORD: lab
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-initdb
+  namespace: whatsapp-lab
+data:
+  01-create-test-database.sql: |
+    -- Base separada para la suite de tests, igual que en Docker Compose.
+    CREATE DATABASE whatsapp_lab_test;

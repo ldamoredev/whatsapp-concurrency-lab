@@ -1,0 +1,67 @@
+# Migraciones como Job, separado del arranque de los pods de API.
+#
+# Es la traduccion del servicio `migrate` de docker-compose. Tres replicas migrando
+# al arrancar seria exactamente la carrera que no queremos: el runner toma un
+# advisory lock y sobreviviria, pero el arranque quedaria serializado y un fallo de
+# migracion se veria como "los pods no levantan".
+#
+# El Job usa LA MISMA imagen que la API: un Job que migrara desde otro artefacto
+# podria aplicar un schema distinto del que la aplicacion espera.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: migrate
+  namespace: whatsapp-lab
+spec:
+  backoffLimit: 3
+  # El Job se borra solo a la hora de terminar, para que `deploy` sea idempotente
+  # sin tener que borrarlo a mano (un Job completado no se puede volver a aplicar
+  # con cambios).
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app: migrate
+    spec:
+      restartPolicy: OnFailure
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+        - name: migrate
+          image: whatsapp-concurrency-lab:v1
+          # La imagen se importa con `k3d image import`, no vive en un registry.
+          imagePullPolicy: IfNotPresent
+          command: ['node', 'dist/scripts/migrate.js']
+          # ORDEN IMPORTANTE: la sustitucion $(VAR) de Kubernetes solo resuelve
+          # variables declaradas ANTES en esta lista. Si DATABASE_URL fuera primero,
+          # el contenedor recibiria el literal "$(POSTGRES_USER)" sin expandir y la
+          # conexion fallaria con un mensaje que no menciona la causa.
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef: { name: lab-postgres, key: POSTGRES_USER }
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: lab-postgres, key: POSTGRES_PASSWORD }
+            - name: POSTGRES_DB
+              valueFrom:
+                configMapKeyRef: { name: lab-config, key: POSTGRES_DB }
+            - name: DATABASE_URL
+              value: postgres://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@postgres:5432/$(POSTGRES_DB)
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { cpu: 500m, memory: 512Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ['ALL']
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        # Con readOnlyRootFilesystem, /tmp tiene que venir de afuera. Hoy el runner
+        # no lo usa, pero cualquier libreria que escriba temporales fallaria sin esto.
+        - name: tmp
+          emptyDir: {}

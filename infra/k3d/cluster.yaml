@@ -1,0 +1,39 @@
+# Cluster local del laboratorio.
+#
+#   k3d cluster create --config infra/k3d/cluster.yaml
+#
+# Multi-node a proposito: con un solo nodo, "las tres replicas estan repartidas"
+# seria una afirmacion vacia. Con dos agents se puede demostrar que el trafico
+# cruza nodos y que matar uno no tumba el servicio.
+apiVersion: k3d.io/v1alpha5
+kind: Simple
+
+metadata:
+  name: whatsapp-lab
+
+servers: 1
+agents: 2
+
+# k3s fijado a 1.25 a proposito: el kubectl de esta maquina es 1.24, y la politica
+# de skew de Kubernetes soporta +-1 minor. Con el k3s por defecto (1.35) kubectl
+# fallaria de formas confusas. Cuando se actualice kubectl, se sube este pin.
+image: rancher/k3s:v1.25.16-k3s4
+
+options:
+  k3d:
+    wait: true
+    timeout: 180s
+  k3s:
+    extraArgs:
+      # El almacenamiento local por nodo alcanza para el PVC de Postgres del lab.
+      # Postgres corre con UNA sola replica: esto prueba consistencia de aplicacion
+      # y recuperacion de pods, NO alta disponibilidad de la base.
+      - arg: --disable=metrics-server
+        nodeFilters:
+          - server:*
+  kubeconfig:
+    updateDefaultKubeconfig: true
+    switchCurrentContext: true
+
+# Sin registry propio: las imagenes se importan con `k3d image import`, asi el
+# artefacto que corre en el cluster es exactamente el que se construyo localmente.

@@ -1,0 +1,7 @@
+# Namespace dedicado: todo el laboratorio vive acá y se borra junto.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: whatsapp-lab
+  labels:
+    app.kubernetes.io/part-of: whatsapp-concurrency-lab

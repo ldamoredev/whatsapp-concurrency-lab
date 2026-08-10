@@ -1,0 +1,107 @@
+# PostgreSQL: UNA sola replica, con PVC.
+#
+# Esto prueba consistencia de aplicacion y recuperacion de pods. NO prueba alta
+# disponibilidad de la base ni tolerancia de zona, y no hay que afirmar lo contrario.
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: whatsapp-lab
+spec:
+  # Headless: el StatefulSet necesita identidad de red estable por pod.
+  clusterIP: None
+  selector:
+    app: postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: whatsapp-lab
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      securityContext:
+        # UID/GID del usuario postgres en la imagen alpine. Sin esto, el PVC queda
+        # con permisos de root y el proceso no puede escribir.
+        runAsUser: 70
+        runAsGroup: 70
+        fsGroup: 70
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          args:
+            # Mismos flags que Compose: el laboratorio necesita VER lock waits y
+            # deadlocks, no esconderlos.
+            - -c
+            - log_lock_waits=on
+            - -c
+            - deadlock_timeout=200ms
+            - -c
+            - log_min_duration_statement=500
+            - -c
+            - max_connections=200
+          env:
+            - name: POSTGRES_DB
+              valueFrom:
+                configMapKeyRef: { name: lab-config, key: POSTGRES_DB }
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef: { name: lab-postgres, key: POSTGRES_USER }
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: lab-postgres, key: POSTGRES_PASSWORD }
+            # El PVC se monta en /var/lib/postgresql/data, que ya tiene un
+            # lost+found: initdb se niega a usar un directorio no vacio. El subdir
+            # evita eso, y es el patron estandar con PVCs.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          ports:
+            - name: postgres
+              containerPort: 5432
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: initdb
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
+          readinessProbe:
+            exec:
+              command: ['pg_isready', '-U', 'lab', '-d', 'whatsapp_lab']
+            initialDelaySeconds: 5
+            periodSeconds: 3
+            timeoutSeconds: 3
+          livenessProbe:
+            exec:
+              command: ['pg_isready', '-U', 'lab']
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 5
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { cpu: '1', memory: 1Gi }
+      volumes:
+        - name: initdb
+          configMap:
+            name: postgres-initdb
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ['ReadWriteOnce']
+        resources:
+          requests:
+            storage: 2Gi
