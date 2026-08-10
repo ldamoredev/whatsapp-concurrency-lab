@@ -42,8 +42,12 @@ npm run stack:up
 
 Y abrir **http://localhost:3001**.
 
-La **portada** explica los dos conceptos con la profundidad que hace falta para contarlos en
-una entrevista.
+La **portada** abre con **la respuesta en 60 segundos** a la pregunta que originó el
+proyecto —«¿cómo manejarías el stock y la concurrencia en un checkout?»— con el guion
+literal, paso por paso, y seis repreguntas con su respuesta corta. Todo lo que sigue es el
+respaldo de esas seis respuestas.
+
+Después, los dos conceptos con la profundidad que hace falta para contarlos.
 
 **Idempotencia**: qué problema resuelve, cuándo recurrir a ella —y cuándo no—, el mínimo
 viable, y **el protocolo completo en 11 pasos con qué se rompe si falta cada uno**. La key

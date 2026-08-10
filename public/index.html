@@ -37,6 +37,159 @@
         </p>
       </div>
 
+
+      <!-- ══ LA RESPUESTA DE ENTREVISTA ═════════════════════════════════════ -->
+      <section class="section" id="respuesta">
+        <h2>La respuesta, en 60 segundos</h2>
+
+        <div class="answer">
+          <p class="answer__q">
+            «¿Cómo manejarías el stock y la concurrencia en un checkout?»
+          </p>
+
+          <div class="answer__step">
+            <span class="answer__n">0</span>
+            <div>
+              <h3 class="answer__h">Lo primero: separar los dos problemas</h3>
+              <p>
+                Suenan a lo mismo y no lo son. <strong>Descontar stock</strong> es un problema
+                de <em>concurrencia</em>: muchos compitiendo por el mismo recurso.
+                <strong>Cobrar</strong> es un problema de <em>idempotencia</em>: el mismo
+                cliente reintentando la misma operación. Se resuelven con herramientas
+                distintas y decirlo primero ordena toda la respuesta.
+              </p>
+            </div>
+          </div>
+
+          <div class="answer__step">
+            <span class="answer__n">1</span>
+            <div>
+              <h3 class="answer__h">Stock — que la condición viaje en el <code>WHERE</code></h3>
+              <p>
+                «Nunca leo el stock, decido en la aplicación y después escribo: entre esas dos
+                cosas entra otro request. Lo hago en una sola sentencia.»
+              </p>
+              <pre class="code answer__code"><b>UPDATE</b> productos <b>SET</b> stock = stock - $2
+ <b>WHERE</b> id = $1 <s>AND stock &gt;= $2</s>;</pre>
+              <p>
+                «Si devuelve <strong>0 filas</strong>, no había stock — y eso no es un error,
+                es la respuesta de negocio. Lee, compara y descuenta en un solo acto atómico,
+                sin bloquear a nadie. Debajo dejo un <code>CHECK (stock &gt;= 0)</code> como
+                red: si algún día alguien escribe la resta sin la condición, la base grita en
+                vez de dejar stock negativo.»
+              </p>
+            </div>
+          </div>
+
+          <div class="answer__step">
+            <span class="answer__n">2</span>
+            <div>
+              <h3 class="answer__h">Pago — una etiqueta del cliente y una constraint</h3>
+              <p>
+                «El cliente manda una <strong>idempotency key</strong> que genera él y repite
+                en cada reintento. El servidor la reclama con un <code>INSERT</code> sobre una
+                tabla con <code>UNIQUE (actor, ruta, key)</code>. <strong>El
+                <code>INSERT</code> es la verificación</strong> — no consulto antes, porque
+                entre la consulta y el insert hay una ventana.»
+              </p>
+              <p>
+                «Si el insert gana, ejecuto el cobro y guardo la respuesta
+                <strong>en la misma transacción</strong>. Si choca contra la constraint, ese
+                error no es una falla: significa que otro llegó primero. Ahí miro qué pasó con
+                esa key: si ya tiene respuesta la devuelvo tal cual, y si está en curso
+                contesto <code>409</code> con <code>Retry-After</code>.»
+              </p>
+              <p>
+                «Guardo también un <strong>fingerprint</strong> del pedido. Si vuelve la misma
+                key con otro contenido, es un bug del cliente: rechazo sin ejecutar, en vez de
+                devolverle la respuesta de otra compra.»
+              </p>
+            </div>
+          </div>
+
+          <div class="answer__step">
+            <span class="answer__n">3</span>
+            <div>
+              <h3 class="answer__h">Lo que cierra la respuesta</h3>
+              <p class="answer__punch">
+                «En los dos casos el patrón es el mismo: <strong>la decisión va en el
+                <code>WHERE</code>, no en un <code>if</code> de la aplicación.</strong> Si está
+                en el código, se evalúa con datos que ya pueden estar viejos; si está en el
+                <code>WHERE</code>, se evalúa en el mismo instante que la escritura.»
+              </p>
+              <p>
+                «Y no lo pongo en memoria ni en Redis porque tengo varias réplicas: cada una
+                tendría su propia verdad. La coordinación va donde ya está el dato.»
+              </p>
+            </div>
+          </div>
+
+          <div class="answer__followups">
+            <h3 class="answer__h">Si repreguntan</h3>
+            <table class="protocol">
+              <tbody>
+                <tr>
+                  <td class="protocol__step">¿Y si el pago falla después de descontar?</td>
+                  <td class="protocol__break">
+                    No descuento: <strong>reservo</strong> con un TTL. Cobro, y confirmo o
+                    libero. Las reservas vencidas las barre un job idempotente. Es una saga con
+                    compensación.
+                  </td>
+                </tr>
+                <tr>
+                  <td class="protocol__step">¿Y si el proceso muere después de reclamar la key?</td>
+                  <td class="protocol__break">
+                    La key queda tomada para siempre. Por eso la reserva tiene
+                    <strong>vencimiento</strong>: cuando expira, otro proceso puede retomarla.
+                  </td>
+                </tr>
+                <tr>
+                  <td class="protocol__step">¿Y si no estaba muerto, sino pausado?</td>
+                  <td class="protocol__break">
+                    Ahí hace falta <strong>fencing</strong>: un contador que sube cada vez que
+                    alguien retoma. El proceso viejo cierra con el número anterior, actualiza
+                    <strong>0 filas</strong> y su efecto se descarta.
+                  </td>
+                </tr>
+                <tr>
+                  <td class="protocol__step">
+                    ¿Por qué no <code>SELECT … FOR UPDATE</code> para el stock?
+                  </td>
+                  <td class="protocol__break">
+                    Funciona, pero serializa a todos los que compran ese producto. El lock hace
+                    falta cuando tenés que leer, decidir algo que no cabe en un
+                    <code>WHERE</code>, y después escribir — como asignar un número de orden.
+                  </td>
+                </tr>
+                <tr>
+                  <td class="protocol__step">¿Y si el cobro lo hace un proveedor externo?</td>
+                  <td class="protocol__break">
+                    Ahí la transacción ya no cubre el efecto. O el proveedor acepta su propia
+                    idempotency key, o uso <strong>outbox</strong>: guardo la intención en la
+                    transacción y un worker la ejecuta. <strong>Exactly-once no existe</strong>
+                    a través de una red.
+                  </td>
+                </tr>
+                <tr>
+                  <td class="protocol__step">¿Qué nivel de aislamiento usás?</td>
+                  <td class="protocol__break">
+                    <code>READ COMMITTED</code>, el default, con constraints y updates
+                    condicionales. Subir el nivel no elimina el problema: lo convierte en
+                    errores de serialización que igual hay que reintentar.
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <p class="answer__note deep">
+            Todo lo que sigue en esta página es el respaldo de estas seis respuestas: por qué
+            cada pieza está, qué se rompe si falta, y los escenarios corriendo contra tres
+            réplicas reales para verlo pasar.
+          </p>
+        </div>
+      </section>
+
       <!-- ══ IDEMPOTENCIA ═══════════════════════════════════════════════════ -->
       <section class="section" id="idempotencia-concepto">
         <h2>Idempotencia</h2>
@@ -251,11 +404,17 @@
                 <tr>
                   <td class="protocol__n">7</td>
                   <td class="protocol__step">
-                    <strong>Lease</strong> con vencimiento sobre la operación en curso
+                    <strong>Lease</strong> sobre la operación en curso
+                    <span class="protocol__tag">
+                      una reserva con fecha de vencimiento: «esta operación es mía
+                      <em>hasta</em> las 10:04:30»
+                    </span>
                   </td>
                   <td class="protocol__break">
                     El proceso dueño se muere y la key queda reclamada para siempre. Esa
-                    operación no se puede reintentar nunca más.
+                    operación no se puede reintentar nunca más. El lease existe porque
+                    <strong>no se puede saber si un proceso murió o está lento</strong>: en vez
+                    de preguntar «¿sigue vivo?», se pregunta «¿su reserva venció?».
                   </td>
                 </tr>
                 <tr>
@@ -265,7 +424,9 @@
                   </td>
                   <td class="protocol__break">
                     El dueño viejo revive —estaba en una pausa de GC, no muerto— y completa
-                    una operación que ya tomó otro. Dos efectos.
+                    una operación que ya tomó otro. Dos efectos. <strong>El fencing es la
+                    consecuencia inevitable del lease</strong>: si el vencimiento es una
+                    apuesta sobre el tiempo, hay que cubrirse por si se pierde.
                   </td>
                 </tr>
                 <tr>
