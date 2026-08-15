@@ -25,6 +25,21 @@ metadata:
   namespace: whatsapp-lab
 spec:
   replicas: 3
+  # maxSurge 0 NO es un detalle de estilo: sin el, el reparto por nodo se pierde en
+  # cada rollout. Con el 25% por defecto, Kubernetes crea el pod nuevo mientras el
+  # viejo todavia existe, y el viejo sigue contando para el skew de su nodo. Se
+  # verifico: el primer rollout con la regla puesta dejo 0 pods en server-0 y 2 en
+  # agent-1 — cada colocacion individual era legal en su momento, y el resultado
+  # final igual violaba la regla. Con maxSurge 0 el pod viejo se va ANTES de que se
+  # planifique el nuevo, asi que el scheduler ve el estado real.
+  #
+  # maxUnavailable 1 lo hace compatible con el PodDisruptionBudget de mas abajo:
+  # nunca baja de 2 replicas listas.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
   selector:
     matchLabels:
       app: api
@@ -38,6 +53,31 @@ spec:
       # entonces se cierra el pool. Si el grace period fuera menor, Kubernetes
       # mandaria SIGKILL a mitad del drenaje.
       terminationGracePeriodSeconds: 30
+      # Una replica por nodo, por REGLA y no por casualidad.
+      #
+      # Hasta acá los tres pods quedaban en nodos distintos porque el scheduler lo
+      # eligio asi, no porque algo lo exigiera: con los tres apilados en un nodo, "el
+      # trafico cruza nodos" y "matar un nodo no tumba el servicio" dejaban de ser
+      # ciertos sin que ningun manifest cambiara.
+      #
+      # `DoNotSchedule` y no `ScheduleAnyway` justamente por eso: si el reparto no se
+      # puede cumplir, se quiere ver un pod en Pending —una afirmacion que falla
+      # ruidosamente— y no tres pods juntos aparentando que la topologia se respeta.
+      # Con 3 nodos y 3 replicas el skew maximo de 1 da uno por nodo; si se cae un
+      # nodo, 2+1 sigue cumpliendo y los pods se reubican.
+      #
+      # LIMITE, que conviene saber antes de confiar en esto: la restriccion se evalua
+      # al PLANIFICAR, no despues. Kubernetes no reubica nada para reequilibrar. Un pod
+      # que ya esta corriendo se queda donde esta aunque el reparto se haya desbalanceado
+      # —por eso hace falta el `maxSurge: 0` de arriba— y si mañana se agregara un cuarto
+      # nodo, los tres pods seguirian donde estan hasta que algo los recree.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: api
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
@@ -103,3 +143,26 @@ spec:
       volumes:
         - name: tmp
           emptyDir: {}
+
+---
+# Cuantas replicas puede sacar de circulacion una interrupcion VOLUNTARIA.
+#
+# "Voluntaria" es la palabra importante: esto cubre drenar un nodo, una actualizacion
+# del cluster, un `kubectl drain`. NO cubre que un pod se muera solo ni que un nodo se
+# apague de golpe — contra eso no hay presupuesto que valga, y el experimento de matar
+# un pod bajo carga (I11) sigue siendo el que prueba esa otra mitad.
+#
+# minAvailable 2 sobre 3 replicas deja exactamente una interrupcion en curso: alcanza
+# para drenar un nodo de a uno, y evita que un drenaje del cluster se lleve dos
+# replicas al mismo tiempo y deje el reparto en un solo pod justo mientras se esta
+# midiendo.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: api
+  namespace: whatsapp-lab
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: api

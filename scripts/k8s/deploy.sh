@@ -33,5 +33,10 @@ kubectl -n "$NS" get ingress api
 kubectl apply -f "$BASE/50-cronjobs.yaml"
 kubectl -n "$NS" get cronjobs
 
+# La NetworkPolicy va al final, cuando todo lo que tiene permiso ya existe: aplicarla
+# antes cerraria la puerta mientras el Job de migraciones todavia la necesita.
+kubectl apply -f "$BASE/60-networkpolicy.yaml"
+kubectl -n "$NS" get networkpolicy
+
 echo
 kubectl -n "$NS" get pods -o wide

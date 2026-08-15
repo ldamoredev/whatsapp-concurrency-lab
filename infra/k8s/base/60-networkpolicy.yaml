@@ -1,0 +1,52 @@
+# Quien puede hablarle a Postgres.
+#
+# ESTO SE APLICA DE VERDAD, y hace falta decirlo porque lo esperable era lo
+# contrario: flannel, el CNI de k3d, NO implementa NetworkPolicy. Lo que la
+# implementa es k3s, que trae su propio controlador (kube-router) encendido salvo
+# que se arranque con `--disable-network-policy`. Verificado ejecutando, no leido:
+# el mismo pod que antes de la politica conectaba a postgres:5432, con la politica
+# puesta se queda afuera.
+#
+# El alcance es a proposito una sola cosa: el ingress a Postgres. No hay un
+# default-deny de namespace. Un default-deny obligaria a escribir tambien las reglas
+# de Traefik hacia la API, del DNS y de las probes, y cada una de esas reglas es una
+# oportunidad de romper el laboratorio de un modo que se parece a un bug de la
+# aplicacion. Lo que se quiere afirmar acá es una sola frase verificable: a la base
+# le hablan la API y sus barridos, nadie mas.
+#
+# CUIDADO al agregar un workload que use la base: si su pod no matchea ninguno de
+# estos selectores, no se cuelga — le REFUSAN la conexion, y el error que se ve es un
+# ECONNREFUSED de Postgres que parece de la base y no de la red.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: postgres-solo-desde-la-aplicacion
+  namespace: whatsapp-lab
+spec:
+  podSelector:
+    matchLabels:
+      app: postgres
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        # Las tres replicas que atienden requests.
+        - podSelector:
+            matchLabels:
+              app: api
+        # El Job de migraciones: corre una vez por deploy y necesita la base entera.
+        - podSelector:
+            matchLabels:
+              app: migrate
+        # Los dos barridos periodicos. Sin estos dos selectores los CronJob fallan
+        # cada corrida: se comprobo dejando la politica sin ellos y los Jobs pasaron
+        # a Failed en el minuto siguiente.
+        - podSelector:
+            matchLabels:
+              app: gaps-expire
+        - podSelector:
+            matchLabels:
+              app: deliveries-cleanup
+      ports:
+        - protocol: TCP
+          port: 5432
