@@ -277,17 +277,29 @@ describe('envio idempotente — conflictos', () => {
   });
 });
 
+/**
+ * Un lease que ya vencio, y que lo decide Postgres: `lease_until = now() - 1s`.
+ *
+ * Antes estos fixtures pedian `leaseMs: 1` y confiaban en que el statement siguiente
+ * llegara mas de 1ms despues. Eso es una carrera contra la latencia de la maquina, no
+ * una afirmacion: en un host donde el round-trip baja del milisegundo el lease TODAVIA
+ * esta vivo cuando el test lo mira, y el rojo no distingue "el fencing fallo" de "esta
+ * maquina es rapida". Un valor negativo lo vuelve determinista sin aflojar nada: el
+ * lease esta vencido segun el reloj de la base, que es el unico que decide.
+ */
+const LEASE_YA_VENCIDO_MS = -1_000;
+
 describe('lease y fencing', () => {
   it('retoma una operacion abandonada cuando el lease vencio, subiendo el attempt', async () => {
     const command = commandFor(fixture);
 
-    // Un owner reclamo la key y murio: lease de 1ms, ya vencido.
+    // Un owner reclamo la key y murio: lease vencido hace un segundo.
     const abandonada = await claimOperation(testPool(), {
       actorId: command.senderId,
       route: SEND_MESSAGE_ROUTE,
       key: command.idempotencyKey,
       fingerprint: (await import('../../src/domain/idempotency/fingerprint')).fingerprintOf(command),
-      leaseMs: 1,
+      leaseMs: LEASE_YA_VENCIDO_MS,
       ttlMs: 60_000,
     });
     expect(abandonada?.attempt).toBe(1);
@@ -321,7 +333,7 @@ describe('lease y fencing', () => {
       route: SEND_MESSAGE_ROUTE,
       key: command.idempotencyKey,
       fingerprint: (await import('../../src/domain/idempotency/fingerprint')).fingerprintOf(command),
-      leaseMs: 1,
+      leaseMs: LEASE_YA_VENCIDO_MS,
       ttlMs: 60_000,
     });
 
@@ -363,7 +375,7 @@ describe('lease y fencing', () => {
       route: SEND_MESSAGE_ROUTE,
       key: command.idempotencyKey,
       fingerprint: 'fp',
-      leaseMs: 1,
+      leaseMs: LEASE_YA_VENCIDO_MS,
       ttlMs: 60_000,
     });
 
