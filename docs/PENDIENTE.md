@@ -9,7 +9,9 @@ Cerrado el 8 de agosto de 2026. Ver [ADR 0001](adr/0001-una-transaccion-para-el-
 Quedó afuera del slice y sigue pendiente:
 
 - **Cleanup de operaciones expiradas.** `idempotency_operations.expires_at` se escribe y hay
-  índice, pero nada barre las vencidas. Va como CronJob junto con el cleanup de envelopes.
+  índice, pero **nada barre las vencidas, y esto sigue abierto**. Ojo con el malentendido
+  fácil: los dos CronJobs de S7 barren *huecos* y *batches de entrega*; ninguno toca
+  `idempotency_operations`. Falta el script —no existe— antes que el manifest.
 - **Failpoint HTTP real para C2.** Hoy C2 se prueba a nivel de servicio: se ejecuta, se
   descarta el resultado y se reintenta. Falta la versión que corta el socket **después del
   commit** y reintenta contra el ingress. Necesita el cluster; un `500` antes del commit no
@@ -23,9 +25,8 @@ Quedó afuera del slice y sigue pendiente:
 Cerrado el 8 de agosto de 2026. Ver
 [ADR 0002](adr/0002-orden-antes-que-disponibilidad.md). Quedó afuera y sigue pendiente:
 
-- **El barrido de huecos no corre solo.** `npm run gaps:expire` existe y es el cuerpo exacto
-  del futuro CronJob, pero hoy hay que invocarlo a mano. Sin él, un stream con un hueco
-  queda en `waiting_gap` para siempre.
+- ~~**El barrido de huecos no corre solo.**~~ ✅ Resuelto el 15 de agosto: el CronJob
+  `gaps-expire` corre cada minuto. Ver S7.
 - **Medir lock vs. optimista.** El orden se asigna con `SELECT ... FOR UPDATE` sobre
   `conversation_sequences`. La columna `version` existe para poder comparar con un
   compare-and-set con reintento. No elegir sin medir: L1 tiene que decir cuál gana en una
@@ -42,10 +43,10 @@ Cerrado el 8 de agosto de 2026. Ver
 Cerrado el 9 de agosto de 2026. Ver
 [ADR 0003](adr/0003-cleanup-con-razon-declarada.md). Quedó afuera y sigue pendiente:
 
-- **Ni el cleanup ni el barrido de huecos corren solos.** `npm run deliveries:cleanup` y
-  `npm run gaps:expire` son los cuerpos exactos de los futuros CronJobs, pero hoy hay que
-  invocarlos a mano. El cleanup por batch completo sí ocurre solo, disparado por el último
-  ack; el que falta es el barrido por TTL.
+- ~~**Ni el cleanup ni el barrido de huecos corren solos.**~~ ✅ Resuelto el 15 de agosto:
+  los dos CronJobs están puestos y verificados ejecutando. Ver S7. El cleanup por batch
+  completo ya ocurría solo con el último ack; lo que faltaba —el barrido por TTL— ahora lo
+  hace `deliveries-cleanup` cada cinco minutos.
 - **No hay endpoint para listar los receipts de un mensaje.** Hoy se consulta de a uno por
   dispositivo. Para un cliente real haría falta el listado.
 - **`DELIVERY_TERMINAL_STATE` cambia el comportamiento en caliente.** Si se cambia de
@@ -85,7 +86,7 @@ Cerrado el 9 de agosto de 2026. Quedó afuera y sigue pendiente:
 - **Sin gráficos de series temporales**: el panel muestra el estado actual, no la
   evolución. Eso es trabajo de Grafana, no del panel.
 
-## ~~S7 — Kubernetes~~ ✅ parcial (9 de agosto de 2026)
+## ~~S7 — Kubernetes~~ ✅ hecho (15 de agosto de 2026)
 
 **Verde y verificado ejecutando:** k3d multi-node (1 server + 2 agents), imagen importada a
 los tres nodos, PostgreSQL en `StatefulSet` con PVC, `Job` de migraciones separado del
@@ -97,18 +98,28 @@ La prueba no fue `/health` en 200: fueron 12 requests con la misma `Idempotency-
 pods, 1 creado, 11 replays, **1 mensaje** en la base. El panel también entra por el ingress
 y descubre las réplicas por su `X-Instance-Id`.
 
-**Falta:**
+**Cerrado el 15 de agosto**, también ejecutando y no declarando:
 
-- **PodDisruptionBudget** `minAvailable: 2` y **topology spread / anti-affinity**. Hoy los
-  pods quedan en nodos distintos por decisión del scheduler, no por una regla.
-- **NetworkPolicy**: falta comprobar si flannel (el CNI de k3d) la implementa. Si no,
-  documentar el límite en vez de fingir que está.
-- **Los dos `CronJob`** (`gaps:expire` y `deliveries:cleanup`). Los scripts existen y son el
-  cuerpo exacto; falta el manifest.
+- **Los dos `CronJob`** (`infra/k8s/base/50-cronjobs.yaml`). `gaps-expire` cada minuto,
+  `deliveries-cleanup` cada cinco. No se reescribió nada: los dos invocan el artefacto
+  compilado que ya viajaba en la imagen (`dist/scripts/`), la misma imagen que la API.
+  - `gaps-expire` se dejó correr **por su propio horario**. Un stream con hueco quedó en
+    `waiting_gap` con deadline 21:16:18; la corrida de 21:16:00 —anterior al hueco— dijo
+    "Sin huecos vencidos", y la de 21:17:00 lo barrió. En la base: antes `waiting_gap` con
+    deadline, después `resync_required` con deadline `NULL`.
+  - `deliveries-cleanup` con un `Job` disparado desde el CronJob, camino TTL: batch con 3
+    envelopes sin completar → `cleanup_reason=expired`, envelopes 0, **receipts 3**, que
+    sobreviven a propósito porque son con lo que se verifica I9.
+- **PodDisruptionBudget** `minAvailable: 2`, probado con la API de evicción (la que usa
+  `kubectl drain`): primera evicción `201`, segunda inmediata `429 Cannot evict pod as it
+  would violate the pod's disruption budget`, presupuesto de 1 → 0.
+- **Topology spread** `maxSkew: 1` con `DoNotSchedule`: una réplica por nodo por **regla**,
+  no por decisión del scheduler. Ver la trampa de `maxSurge` más abajo.
+- **NetworkPolicy**: **sí se aplica**, al revés de lo que se sospechaba. Ver abajo.
 - **Postgres sigue con una sola réplica**, a propósito: prueba consistencia de aplicación y
   recuperación de pods, **no** alta disponibilidad de la base.
 
-### Tres cosas que costaron tiempo y conviene no repetir
+### Seis cosas que costaron tiempo y conviene no repetir
 
 - **`kubectl port-forward svc/…` NO balancea.** Fija un pod y se queda ahí, aunque apuntes al
   Service: doce curl dieron los doce al mismo pod. Por eso hay dos smoke tests —
@@ -119,6 +130,31 @@ y descubre las réplicas por su `X-Instance-Id`.
 - **Un Ingress sin puerto publicado es inalcanzable.** El `serverlb` de k3d sólo expone 6443;
   hizo falta `ports: 8081:80` con `nodeFilter: loadbalancer` en `infra/k3d/cluster.yaml`, y
   cambiar eso obliga a **recrear el cluster**.
+- **El topology spread se evalúa al PLANIFICAR, y `maxSurge` lo arruina en silencio.** El
+  primer rollout con la regla puesta dejó **0 pods en `server-0` y 2 en `agent-1`**, con la
+  regla aplicada y sin ningún error. Con `maxSurge: 25%` el pod nuevo se crea mientras el
+  viejo todavía existe y el viejo **sigue contando para el skew de su nodo**: cada colocación
+  era legal por separado y el resultado final igual violaba la regla. Por eso el Deployment
+  fija `maxSurge: 0` / `maxUnavailable: 1`. Kubernetes tampoco reubica nada después: si se
+  agrega un nodo, los pods se quedan donde están hasta que algo los recree. Verificar el
+  reparto **después de un `rollout restart` completo**, no recién desplegado.
+- **Flannel no implementa NetworkPolicy, pero k3s sí — la sospecha del handoff era al revés.**
+  k3s trae su propio controlador (kube-router) encendido salvo `--disable-network-policy`, y
+  se aplica de verdad. Medido con dos pods idénticos que esperan 30 s antes de conectar (para
+  que el resultado no sea el retraso de propagación de las reglas): etiqueta no autorizada
+  **BLOQUEADO (`ECONNREFUSED`)**, etiqueta `app=gaps-expire` **CONECTO**. Antes de aplicar la
+  política, el mismo pod conectaba. Dos cosas que confunden al diagnosticar:
+  - el rechazo llega como **`ECONNREFUSED`**, no como timeout: parece un error *de Postgres*
+    y no de la red. Si un workload nuevo no puede hablar con la base, mirar primero si su pod
+    matchea algún selector de `60-networkpolicy.yaml`.
+  - un pod recién creado puede ser rechazado durante los primeros segundos aunque **esté**
+    autorizado, hasta que kube-router programa su IP. Con los CronJob no pasó (tres corridas
+    seguidas `Complete` sin fallos), pero al probar a mano hay que esperar antes de concluir.
+- **`restartCount: 1` en un pod de Job no significa que falló.** Los pods de los CronJob
+  aparecían como `Completed 1` justo después de aplicar la NetworkPolicy y parecía que cada
+  corrida pagaba un intento fallido. No: `lastState` vacío, un solo evento `Started`, ningún
+  `BackOff`, y el Job con `succeeded: 1` / `failed: none`. La verdad está en las condiciones
+  del **Job**, no en el contador de reinicios del pod.
 
 ### El test C1 es sensible a la saturación de la máquina
 
@@ -136,17 +172,67 @@ es que distinga «el sistema violó una invariante» de «la máquina no daba ab
 pide clasificar el error de pool aparte. Hasta entonces: correr la suite con un solo stack
 levantado.
 
+Nota de la máquina nueva (15 de agosto): C1 no volvió a fallar en ninguna de las cuatro
+corridas completas de la suite, con Compose bajado antes de levantar k3d. **Pero acá hay
+además 8 contenedores de otros proyectos corriendo** (redpanda, jaeger, 4 Postgres) que no
+se tocaron por no ser de este repo. Son exactamente el tipo de carga de fondo que este flake
+mide: si vuelve a aparecer, mirar `docker ps` completo antes de sospechar del código.
+
 ### Deuda del entorno
 
-- **kubectl local es v1.24 (2022).** Por eso el cluster está fijado a `rancher/k3s:v1.25.16`
-  en `infra/k3d/cluster.yaml`: el skew soportado es ±1 minor. Al actualizar kubectl, subir
-  ese pin.
+**El repo se usa desde dos máquinas y no tienen el mismo toolchain.** Lo que sigue es por
+máquina, porque mezclarlo ya causó un pin mal justificado.
+
+- **El pin de k3s es uno solo para las dos máquinas, y hoy es `rancher/k3s:v1.30.14-k3s1`.**
+  Se subió desde `v1.25.16-k3s4` el 15 de agosto, cuando el repo se clonó en una máquina con
+  **kubectl v1.30.2**: contra 1.25 el skew era de 5 minors, muy fuera de la política de ±1.
+  El comentario de `infra/k3d/cluster.yaml` decía "el kubectl de esta máquina es 1.24" y ya
+  no era cierto de nadie; está reescrito.
+
+  **Para la máquina vieja (kubectl 1.24):** un cluster ya creado **no cambia solo** —sigue
+  corriendo la imagen con la que nació—, así que traer estos commits no rompe nada de
+  inmediato. Pero el primer `cluster:up` después de un `cluster:down` lo recrea con 1.30, y
+  kubectl 1.24 no puede hablarle. **Subir kubectl allá antes de recrear el cluster.**
+- **`npm ci` en limpio: 148 paquetes, sin sorpresas.** `npm audit` reporta 2 vulnerabilidades
+  high; no se tocó (`audit fix` mueve dependencias y eso no era el alcance).
+- **k3d se instala con `brew install k3d`** (acá quedó 5.9.0). **helm y k6 siguen sin
+  instalar**: helm no hace falta hoy, k6 sí para S8.
 - **Docker Compose 2.5.1 no arranca los contenedores con `up -d --force-recreate`**: los deja
-  en `created` y hay que hacer `docker compose start`.
+  en `created` y hay que hacer `docker compose start`. En la máquina nueva (Compose 2.29.7)
+  esto **no** pasa: `db:up` con `--wait` funcionó de una.
+
+### El fixture de lease de 1 ms dependía de la velocidad de la máquina
+
+Al clonar en la máquina nueva, 2 de 175 tests salieron en rojo —de forma **intermitente**:
+cinco corridas dieron 2, 1, 2, 2, 2 fallos—. Los dos eran de `lease y fencing`.
+
+No era el dominio. Tres fixtures pedían `leaseMs: 1` y daban por hecho que el statement
+siguiente llegaría más de un milisegundo después. Eso es una carrera contra la latencia:
+medido acá, el round-trip va de **0.47 a 3.08 ms**, con 4 de 15 por debajo del milisegundo.
+Reproduciendo el camino exacto, el margen de `lease_until - now()` al leer iba de -5.9 ms a
+**-0.45 ms**: cruza el cero. Cuando la máquina gana, el lease **todavía está vivo** al
+mirarlo y `lease_is_alive` vuelve `true`.
+
+Se cambió a `LEASE_YA_VENCIDO_MS = -1000` (`lease_until = now() - 1s`). **Esto no contradice
+la regla de no maquillar tests**, y la diferencia con el flake de C1 importa: en C1 aflojar la
+aserción escondería la distinción entre "el sistema violó una invariante" y "la máquina no
+daba abasto". Acá pasa lo contrario — el test no distinguía "el lease venció" de "la máquina
+fue rápida", y fijar el deadline en el pasado lo vuelve **más estricto**, no más laxo. No se
+tocó `src/`: la comparación siempre la hizo PostgreSQL, que es el punto del test.
 
 ## S8 — fallos, carga y evidencia
 
-- Toxiproxy entre API y Postgres, k6 desde fuera del cluster.
+**Lo primero, porque bloquea todo lo demás: el seed reproducible.** Sin datos conocidos no
+hay corrida de k6 repetible, y sin corrida repetible el pod kill bajo carga no prueba nada —
+mide dos poblaciones distintas y la diferencia no se puede atribuir a la falla. Hoy lo único
+que arma estado es `POST /lab/reset` (una conversación, hasta 8 dispositivos, y **trunca
+todas las tablas**), y la demo del README crea la conversación con SQL a mano. Falta un
+script idempotente y parametrizable: N conversaciones × M dispositivos, corrible contra
+Compose y contra el cluster, que se pueda correr dos veces sin duplicar nada. **No empezado.**
+
+- Toxiproxy entre API y Postgres, k6 desde fuera del cluster (**k6 no está instalado**).
+- El escenario base de k6 va contra el **ingress**, no contra los pods, y con modelo abierto.
+  Falta anotar el primer p95.
 - Prometheus + Grafana como código. Nunca IDs ni keys como labels.
 - Pod kill durante carga (I11), `evidence/RESULTS.md`.
 
@@ -168,5 +254,5 @@ levantado.
 - `delivery_envelopes` no se consume: nadie los procesa ni los marca `delivered`. Es trabajo
   pendiente que hoy sólo se acumula. Slice 4.
 - La demo del README crea la conversación con SQL a mano porque **no hay endpoints de
-  administración** (crear conversación, agregar dispositivo). Para k6 va a hacer falta un
-  seed script reproducible.
+  administración** (crear conversación, agregar dispositivo). Para k6 hace falta un seed
+  script reproducible: es lo que abre S8 y está descrito arriba.
