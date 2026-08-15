@@ -1,0 +1,155 @@
+# Los dos barridos periodicos, como CronJob.
+#
+# Los cuerpos ya existian y estaban probados: `scripts/expire-gaps.ts` y
+# `scripts/cleanup-deliveries.ts`, los mismos que corren `npm run gaps:expire` y
+# `npm run deliveries:cleanup`. Lo unico que faltaba era quien los dispare. Acá no se
+# reescribe nada de esa logica: se la agenda. Por eso los dos containers invocan el
+# artefacto compilado que ya viaja en la imagen (`dist/scripts/…`), la MISMA imagen
+# que la API y el Job de migraciones — un barrido que corriera desde otro artefacto
+# podria estar barriendo con reglas distintas de las que la aplicacion escribe.
+#
+# Los dos comparten forma con `20-migrate-job.yaml`, incluida la trampa del orden de
+# `env:` que esta documentada alli y se repite acá: la sustitucion $(VAR) de
+# Kubernetes solo resuelve variables declaradas ANTES en la misma lista.
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: gaps-expire
+  namespace: whatsapp-lab
+spec:
+  # Cada minuto, que es lo mas fino que permite cron. El `GAP_TIMEOUT_MS` del cluster
+  # es de 10s, asi que un hueco vencido espera a lo sumo un minuto para pasar a
+  # `resync_required`. Ese retraso es del planificador, no del barrido: quien decide
+  # si el deadline vencio es `now()` de PostgreSQL cuando el barrido corre.
+  schedule: '* * * * *'
+  # Dos barridos simultaneos competirian por las mismas filas. La base los aguanta
+  # (el UPDATE es condicional), pero encolar corridas sobre una maquina que ya no da
+  # abasto solo agrega ruido al diagnostico.
+  concurrencyPolicy: Forbid
+  # Si el controlador estuvo caido y quedaron corridas sin disparar, se saltean en vez
+  # de largar todas juntas al volver. Un barrido idempotente no necesita ponerse al dia.
+  startingDeadlineSeconds: 60
+  # Historial suficiente para leer los logs de las ultimas corridas: es la evidencia de
+  # que el barrido efectivamente corrio y que encontro.
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      # Un barrido colgado no puede quedarse tomando conexiones del pool para siempre.
+      activeDeadlineSeconds: 120
+      template:
+        metadata:
+          labels:
+            app: gaps-expire
+        spec:
+          restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+          containers:
+            - name: gaps-expire
+              image: whatsapp-concurrency-lab:v1
+              imagePullPolicy: IfNotPresent
+              command: ['node', 'dist/scripts/expire-gaps.js']
+              # ORDEN IMPORTANTE: ver el comentario de 20-migrate-job.yaml.
+              env:
+                - name: POSTGRES_USER
+                  valueFrom:
+                    secretKeyRef: { name: lab-postgres, key: POSTGRES_USER }
+                - name: POSTGRES_PASSWORD
+                  valueFrom:
+                    secretKeyRef: { name: lab-postgres, key: POSTGRES_PASSWORD }
+                - name: POSTGRES_DB
+                  valueFrom:
+                    configMapKeyRef: { name: lab-config, key: POSTGRES_DB }
+                - name: DATABASE_URL
+                  value: postgres://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@postgres:5432/$(POSTGRES_DB)
+                # Un barrido no necesita diez conexiones: abre una, barre y se va. El
+                # pool de la API no se toca, y una tanda de barridos no puede comerse
+                # las conexiones que necesitan los pods que atienden requests.
+                - name: DATABASE_POOL_MAX
+                  value: '2'
+              resources:
+                requests: { cpu: 50m, memory: 128Mi }
+                limits: { cpu: 500m, memory: 512Mi }
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ['ALL']
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: tmp
+              emptyDir: {}
+
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: deliveries-cleanup
+  namespace: whatsapp-lab
+spec:
+  # Cada cinco minutos: este barrido es la RED, no el camino principal. El cleanup del
+  # caso feliz ya ocurre solo, disparado por el ultimo ack de un batch; lo que este
+  # recoge son los batches que vencieron por TTL sin completarse. Correrlo cada minuto
+  # gastaria conexiones para no encontrar nada casi siempre.
+  schedule: '*/5 * * * *'
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 60
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 300
+      template:
+        metadata:
+          labels:
+            app: deliveries-cleanup
+        spec:
+          restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+          containers:
+            - name: deliveries-cleanup
+              image: whatsapp-concurrency-lab:v1
+              imagePullPolicy: IfNotPresent
+              # El script termina con exit code 1 si encuentra una violacion de I9 (un
+              # batch limpiado con dispositivos pendientes). Eso es deliberado: asi una
+              # violacion aparece como un Job en Failed en `kubectl get jobs`, y no
+              # como una linea perdida en un log que nadie lee.
+              command: ['node', 'dist/scripts/cleanup-deliveries.js']
+              # ORDEN IMPORTANTE: ver el comentario de 20-migrate-job.yaml.
+              env:
+                - name: POSTGRES_USER
+                  valueFrom:
+                    secretKeyRef: { name: lab-postgres, key: POSTGRES_USER }
+                - name: POSTGRES_PASSWORD
+                  valueFrom:
+                    secretKeyRef: { name: lab-postgres, key: POSTGRES_PASSWORD }
+                - name: POSTGRES_DB
+                  valueFrom:
+                    configMapKeyRef: { name: lab-config, key: POSTGRES_DB }
+                - name: DATABASE_URL
+                  value: postgres://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@postgres:5432/$(POSTGRES_DB)
+                - name: DATABASE_POOL_MAX
+                  value: '2'
+              resources:
+                requests: { cpu: 50m, memory: 128Mi }
+                limits: { cpu: 500m, memory: 512Mi }
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ['ALL']
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: tmp
+              emptyDir: {}

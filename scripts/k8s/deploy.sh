@@ -28,5 +28,10 @@ kubectl -n "$NS" rollout status deployment/api --timeout=180s
 kubectl apply -f "$BASE/40-ingress.yaml"
 kubectl -n "$NS" get ingress api
 
+# Los barridos periodicos. No dependen del Ingress ni de que la API este lista: hablan
+# con Postgres directamente.
+kubectl apply -f "$BASE/50-cronjobs.yaml"
+kubectl -n "$NS" get cronjobs
+
 echo
 kubectl -n "$NS" get pods -o wide
