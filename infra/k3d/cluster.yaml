@@ -24,10 +24,17 @@ ports:
     nodeFilters:
       - loadbalancer
 
-# k3s fijado a 1.25 a proposito: el kubectl de esta maquina es 1.24, y la politica
-# de skew de Kubernetes soporta +-1 minor. Con el k3s por defecto (1.35) kubectl
-# fallaria de formas confusas. Cuando se actualice kubectl, se sube este pin.
-image: rancher/k3s:v1.25.16-k3s4
+# k3s fijado a 1.30 a proposito, para acompañar al kubectl de la maquina de trabajo
+# (v1.30.2): la politica de skew de Kubernetes soporta +-1 minor, y con el k3s por
+# defecto (1.35) kubectl fallaria de formas confusas. El pin se sube cuando se sube
+# kubectl, no antes.
+#
+# ATENCION al usar el repo desde dos maquinas: este pin es unico para todas. Una
+# maquina con kubectl viejo (1.24, el pin anterior era 1.25 por eso) queda a 6 minors
+# del server y no puede hablarle. Cambiar este valor NO afecta a un cluster ya creado
+# —sigue corriendo la imagen con la que nacio— pero el primer `cluster:up` despues de
+# un `cluster:down` lo recrea con esta version. Antes de recrear alla: subir kubectl.
+image: rancher/k3s:v1.30.14-k3s1
 
 options:
   k3d:
