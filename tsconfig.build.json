@@ -5,6 +5,12 @@
     // la raiz del proyecto. Por eso la salida queda en dist/src y dist/scripts.
     "rootDir": "."
   },
-  "include": ["src/**/*", "scripts/migrate.ts", "scripts/expire-gaps.ts", "scripts/cleanup-deliveries.ts"],
+  "include": [
+    "src/**/*",
+    "scripts/migrate.ts",
+    "scripts/expire-gaps.ts",
+    "scripts/cleanup-deliveries.ts",
+    "scripts/seed.ts"
+  ],
   "exclude": ["node_modules", "dist", "test", "scripts/demo-*.ts", "**/*.spec.ts"]
 }

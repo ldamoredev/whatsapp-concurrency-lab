@@ -47,6 +47,11 @@ spec:
         - podSelector:
             matchLabels:
               app: deliveries-cleanup
+        # El Job del seed (`npm run k8s:seed`). No se despliega con el resto: se corre
+        # a pedido, pero su permiso de red tiene que estar declarado igual.
+        - podSelector:
+            matchLabels:
+              app: seed
       ports:
         - protocol: TCP
           port: 5432
