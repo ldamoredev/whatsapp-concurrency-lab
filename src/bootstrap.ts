@@ -7,6 +7,7 @@ import { DomainErrorFilter } from './http/domain-error.filter';
 import { PG_POOL } from './infrastructure/database/database.module';
 import { INSTANCE_ID } from './observability/instance';
 import { lifecycle } from './observability/lifecycle';
+import { log, logger, newRequestId, runWithRequestId } from './observability/logger';
 import {
   httpDuration,
   httpInflight,
@@ -53,6 +54,7 @@ export async function createApp(options: { logger?: boolean } = {}): Promise<Nes
 
 interface TimedRequest {
   labStart?: bigint;
+  labRequestId?: string;
 }
 
 /**
@@ -73,7 +75,29 @@ function registerHttpInstrumentation(app: NestFastifyApplication): void {
     // Solo para el laboratorio: es la evidencia de que el balanceador repartio las
     // carreras. Un sistema real no le cuenta al cliente que pod lo atendio.
     void reply.header('X-Instance-Id', INSTANCE_ID);
-    done();
+
+    // El requestId se RESPETA si el cliente lo manda. Asi una traza que empieza en otro
+    // servicio no se corta acá: es el mismo id de punta a punta. Si no viene, se genera.
+    const entrante = request.headers['x-request-id'];
+    const requestId = typeof entrante === 'string' && entrante.length > 0 ? entrante : newRequestId();
+    (request as TimedRequest).labRequestId = requestId;
+    // Se devuelve al cliente: sin esto, quien recibe un 500 no tiene con que pedir ayuda.
+    void reply.header('X-Request-Id', requestId);
+
+    // `done()` se llama DENTRO del contexto: todo lo que siga en esta request —hooks,
+    // controller, servicios, repositorios— hereda el requestId sin recibirlo por firma.
+    runWithRequestId(requestId, () => {
+      log().debug(
+        {
+          evento: 'request.inicio',
+          metodo: request.method,
+          url: request.url,
+          idempotencyKey: request.headers['idempotency-key'],
+        },
+        'request recibido',
+      );
+      done();
+    });
   });
 
   fastify.addHook('onResponse', (request, reply, done) => {
@@ -90,9 +114,27 @@ function registerHttpInstrumentation(app: NestFastifyApplication): void {
     };
 
     httpRequests.inc(labels);
-    if (start !== undefined) {
-      httpDuration.observe(labels, Number(process.hrtime.bigint() - start) / 1e9);
+    const duracionMs =
+      start === undefined ? undefined : Number(process.hrtime.bigint() - start) / 1e6;
+    if (duracionMs !== undefined) {
+      httpDuration.observe(labels, duracionMs / 1000);
     }
+
+    // Una linea por request terminado, con lo minimo para reconstruir el camino: quien,
+    // que ruta, con que termino y cuanto tardo. El nivel sube con el status porque en
+    // una corrida de 30.000 requests nadie lee 30.000 lineas de info, pero si lee las
+    // que dicen "error".
+    const nivel = reply.statusCode >= 500 ? 'error' : reply.statusCode >= 400 ? 'warn' : 'info';
+    log()[nivel](
+      {
+        evento: 'request.fin',
+        metodo: request.method,
+        ruta: route,
+        status: reply.statusCode,
+        duracionMs: duracionMs === undefined ? undefined : Number(duracionMs.toFixed(2)),
+      },
+      'request terminado',
+    );
 
     done();
   });
@@ -125,14 +167,14 @@ export function installShutdownHandlers(
     }
     shuttingDown = true;
 
-    console.log(`[${INSTANCE_ID}] ${signal} recibido: marcando no-ready y drenando.`);
+    logger.info({ evento: 'apagado.inicio', signal, drainDelayMs }, 'senal recibida: drenando');
     lifecycle.startDraining();
 
     await new Promise((resolve) => setTimeout(resolve, drainDelayMs));
 
-    console.log(`[${INSTANCE_ID}] cerrando conexiones y pool.`);
+    logger.info({ evento: 'apagado.cerrando' }, 'cerrando conexiones y pool');
     await app.close();
-    console.log(`[${INSTANCE_ID}] apagado limpio.`);
+    logger.info({ evento: 'apagado.listo' }, 'apagado limpio');
     process.exit(0);
   };
 

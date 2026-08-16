@@ -14,6 +14,7 @@ import {
   StreamNotFoundError,
   StreamResyncRequiredError,
 } from '../domain/idempotency/errors';
+import { log } from '../observability/logger';
 
 /**
  * Traduce errores de dominio a HTTP.
@@ -47,6 +48,19 @@ export class DomainErrorFilter implements ExceptionFilter {
         body.nextClientSequence = exception.nextClientSequence;
       }
 
+      // Un error de dominio NO es un bug: es el sistema diciendo que no. Va en `warn`
+      // con su `code`, que es el mismo que ve el cliente — asi la linea del log y el
+      // cuerpo de la respuesta se pueden cruzar sin traduccion.
+      log().warn(
+        {
+          evento: 'dominio.rechazo',
+          code: exception.code,
+          status,
+          error: exception.message,
+        },
+        'rechazado por el dominio',
+      );
+
       void reply.status(status).send(body);
       return;
     }
@@ -59,8 +73,17 @@ export class DomainErrorFilter implements ExceptionFilter {
       return;
     }
 
-    // Un error no previsto no puede filtrar detalles internos al cliente.
-    console.error('[unhandled]', exception);
+    // Un error no previsto no puede filtrar detalles internos al cliente. Pero el stack
+    // SI tiene que quedar del lado del servidor: es la unica forma de saber por que
+    // exploto algo que nadie previo. El cliente se lleva el requestId en el header y con
+    // eso alcanza para encontrar esta linea.
+    log().error(
+      {
+        evento: 'error.no_previsto',
+        err: exception instanceof Error ? { message: exception.message, stack: exception.stack } : exception,
+      },
+      'error no previsto',
+    );
     void reply.status(500).send({ code: 'INTERNAL_ERROR', message: 'Error interno.' });
   }
 }

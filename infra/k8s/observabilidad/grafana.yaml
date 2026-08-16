@@ -25,6 +25,11 @@ data:
         access: proxy
         url: http://prometheus:9090
         isDefault: true
+      - name: Loki
+        type: loki
+        uid: loki
+        access: proxy
+        url: http://loki:3100
   dashboards.yml: |
     apiVersion: 1
     providers:
@@ -47,35 +52,61 @@ data:
       "uid": "whatsapp-lab",
       "timezone": "browser",
       "refresh": "5s",
-      "time": { "from": "now-15m", "to": "now" },
+      "time": {
+        "from": "now-15m",
+        "to": "now"
+      },
       "panels": [
         {
           "title": "1. SLO — p95 y p99 por ruta",
           "type": "timeseries",
-          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
-          "fieldConfig": { "defaults": { "unit": "s" } },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 0
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s"
+            }
+          },
           "targets": [
             {
               "expr": "histogram_quantile(0.95, sum by (le, route) (rate(lab_http_request_duration_seconds_bucket[1m])))",
-              "legendFormat": "p95 {{route}}"
+              "legendFormat": "p95 {{route}}",
+              "refId": "A"
             },
             {
               "expr": "histogram_quantile(0.99, sum by (le, route) (rate(lab_http_request_duration_seconds_bucket[1m])))",
-              "legendFormat": "p99 {{route}}"
+              "legendFormat": "p99 {{route}}",
+              "refId": "B"
             }
-          ]
+          ],
+          "id": 1
         },
         {
           "title": "2. Invariantes violadas (tiene que ser CERO)",
           "type": "stat",
-          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 0
+          },
           "fieldConfig": {
             "defaults": {
               "thresholds": {
                 "mode": "absolute",
                 "steps": [
-                  { "color": "green", "value": null },
-                  { "color": "red", "value": 1 }
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 1
+                  }
                 ]
               }
             }
@@ -83,65 +114,161 @@ data:
           "targets": [
             {
               "expr": "sum(lab_invariant_violations_total) or vector(0)",
-              "legendFormat": "violaciones"
+              "legendFormat": "violaciones",
+              "refId": "A"
             }
-          ]
+          ],
+          "id": 2
         },
         {
           "title": "3. Que replica recibio trafico (req/s por pod)",
           "type": "timeseries",
-          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 8
+          },
           "targets": [
             {
               "expr": "sum by (instance) (rate(lab_http_requests_total[1m]))",
-              "legendFormat": "{{instance}}"
+              "legendFormat": "{{instance}}",
+              "refId": "A"
             }
-          ]
+          ],
+          "id": 3
         },
         {
           "title": "4a. Saturacion — pool de Postgres (waiting es el que importa)",
           "type": "timeseries",
-          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 8
+          },
           "targets": [
             {
               "expr": "sum by (state) (lab_pg_pool_connections)",
-              "legendFormat": "{{state}}"
+              "legendFormat": "{{state}}",
+              "refId": "A"
             }
-          ]
+          ],
+          "id": 4
         },
         {
           "title": "4b. Saturacion — event loop lag y requests en vuelo",
           "type": "timeseries",
-          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 16
+          },
           "targets": [
             {
               "expr": "max by (quantile) (lab_event_loop_lag_seconds)",
-              "legendFormat": "event loop {{quantile}}"
+              "legendFormat": "event loop {{quantile}}",
+              "refId": "A"
             },
             {
               "expr": "sum(lab_http_inflight_requests)",
-              "legendFormat": "en vuelo"
+              "legendFormat": "en vuelo",
+              "refId": "B"
             }
-          ]
+          ],
+          "id": 5
         },
         {
           "title": "5. Recuperacion — replicas listas y resultados de idempotencia",
           "type": "timeseries",
-          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 16
+          },
           "targets": [
             {
               "expr": "sum(lab_ready)",
-              "legendFormat": "replicas listas"
+              "legendFormat": "replicas listas",
+              "refId": "A"
             },
             {
               "expr": "sum by (outcome) (rate(lab_idempotency_outcomes_total[1m]))",
-              "legendFormat": "{{outcome}}"
+              "legendFormat": "{{outcome}}",
+              "refId": "B"
             }
-          ]
+          ],
+          "id": 6
+        },
+        {
+          "title": "6. Rechazos y errores — que se rompio y por que",
+          "type": "logs",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "gridPos": {
+            "h": 9,
+            "w": 12,
+            "x": 0,
+            "y": 24
+          },
+          "options": {
+            "showTime": true,
+            "wrapLogMessage": true,
+            "sortOrder": "Descending"
+          },
+          "targets": [
+            {
+              "expr": "{namespace=\"whatsapp-lab\", app=\"api\", level=~\"warn|error\"}",
+              "queryType": "range",
+              "refId": "A"
+            }
+          ],
+          "id": 7
+        },
+        {
+          "title": "7. El camino de UN request (pega el requestId arriba)",
+          "type": "logs",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "gridPos": {
+            "h": 9,
+            "w": 12,
+            "x": 12,
+            "y": 24
+          },
+          "options": {
+            "showTime": true,
+            "wrapLogMessage": true,
+            "sortOrder": "Ascending"
+          },
+          "targets": [
+            {
+              "expr": "{namespace=\"whatsapp-lab\", app=\"api\"} |= \"$requestId\"",
+              "queryType": "range",
+              "refId": "A"
+            }
+          ],
+          "id": 8
         }
-      ]
+      ],
+      "templating": {
+        "list": [
+          {
+            "name": "requestId",
+            "label": "requestId (para seguir un request)",
+            "type": "textbox",
+            "query": "",
+            "hide": 0
+          }
+        ]
+      }
     }
-
 ---
 apiVersion: apps/v1
 kind: Deployment

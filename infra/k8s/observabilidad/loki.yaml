@@ -1,0 +1,298 @@
+# Loki + Alloy: los logs estructurados, agregados y consultables.
+#
+# POR QUE LOKI Y NO ELASTIC. Loki no indexa el contenido de los logs, solo un puñado de
+# labels; el resto se guarda comprimido y se filtra al leer. Eso lo hace mucho mas barato
+# y encaja con lo que ya hay: mismas etiquetas que Prometheus, mismo Grafana, y se puede
+# saltar de un pico en una metrica a los logs de ESE pod en ESE minuto sin cambiar de
+# herramienta. Para un laboratorio de un solo nodo, indexar texto completo seria pagar
+# por una capacidad que no se usa.
+#
+# POR QUE ALLOY Y NO PROMTAIL. Promtail era el agente clasico de Loki y esta
+# descontinuado: Grafana lo declaro fin de vida y empuja a Alloy, que es el mismo
+# colector unificado para metricas, logs y trazas. Elegir hoy Promtail seria empezar con
+# deuda.
+#
+# NO VIVE EN infra/k8s/base/ por lo mismo que Prometheus: se levanta a pedido con
+# `npm run obs:up`.
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: loki-config
+  namespace: whatsapp-lab
+data:
+  loki.yaml: |
+    auth_enabled: false
+    server:
+      http_listen_port: 3100
+      log_level: warn
+
+    common:
+      instance_addr: 127.0.0.1
+      path_prefix: /loki
+      storage:
+        filesystem:
+          chunks_directory: /loki/chunks
+          rules_directory: /loki/rules
+      replication_factor: 1
+      ring:
+        kvstore:
+          store: inmemory
+
+    schema_config:
+      configs:
+        - from: 2024-01-01
+          store: tsdb
+          object_store: filesystem
+          schema: v13
+          index:
+            prefix: index_
+            period: 24h
+
+    limits_config:
+      # El laboratorio genera rafagas grandes en poco tiempo (30.000 requests en 5
+      # minutos). Los limites por defecto de Loki estan pensados para produccion con
+      # muchos tenants y descartarian lineas justo durante el experimento.
+      ingestion_rate_mb: 32
+      ingestion_burst_size_mb: 64
+      reject_old_samples: false
+      # Sin esto Loki rechaza lineas con timestamp futuro por microsegundos de skew.
+      max_query_series: 5000
+      allow_structured_metadata: true
+
+    # Retencion corta: esto es un lab. Lo que importa se copia a evidence/.
+    table_manager:
+      retention_deletes_enabled: true
+      retention_period: 24h
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: loki
+  namespace: whatsapp-lab
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: loki
+  template:
+    metadata:
+      labels:
+        app: loki
+    spec:
+      containers:
+        - name: loki
+          image: grafana/loki:3.7.6
+          imagePullPolicy: IfNotPresent
+          args: ['-config.file=/etc/loki/loki.yaml']
+          ports:
+            - name: http
+              containerPort: 3100
+          readinessProbe:
+            httpGet: { path: /ready, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 30
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { cpu: '1', memory: 1Gi }
+          volumeMounts:
+            - name: config
+              mountPath: /etc/loki
+            - name: datos
+              mountPath: /loki
+      volumes:
+        - name: config
+          configMap:
+            name: loki-config
+        - name: datos
+          emptyDir: {}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: loki
+  namespace: whatsapp-lab
+spec:
+  type: ClusterIP
+  selector:
+    app: loki
+  ports:
+    - name: http
+      port: 3100
+      targetPort: 3100
+
+---
+# Alloy necesita permisos para descubrir pods y LEER SUS LOGS por la API de Kubernetes.
+#
+# Se leen por la API y no montando /var/log del nodo a proposito: montar rutas del host
+# obliga a privilegios sobre el nodo, y acá alcanza con permiso de solo lectura sobre un
+# recurso concreto.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: alloy
+  namespace: whatsapp-lab
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: alloy-lector-de-logs
+rules:
+  - apiGroups: ['']
+    resources: ['pods', 'pods/log', 'namespaces', 'nodes', 'nodes/proxy']
+    verbs: ['get', 'list', 'watch']
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: alloy-lector-de-logs
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: alloy-lector-de-logs
+subjects:
+  - kind: ServiceAccount
+    name: alloy
+    namespace: whatsapp-lab
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alloy-config
+  namespace: whatsapp-lab
+data:
+  config.alloy: |
+    // Descubre los pods del cluster.
+    discovery.kubernetes "pods" {
+      role = "pod"
+    }
+
+    // Que se recolecta y con que etiquetas.
+    //
+    // REGLA CRITICA, la misma que en Prometheus: NINGUN identificador de alta
+    // cardinalidad puede ser LABEL. Ni requestId, ni messageId, ni idempotency key. En
+    // Loki un label nuevo crea un stream nuevo, y un stream por request destruye el
+    // indice igual que una serie por request destruye Prometheus.
+    //
+    // Los identificadores viajan DENTRO de la linea JSON y se filtran al leer, con
+    // `| json | requestId="..."`. Es un poco mas lento de consultar y es la unica forma
+    // que escala.
+    discovery.relabel "pods" {
+      targets = discovery.kubernetes.pods.targets
+
+      // Solo el namespace del laboratorio: los logs de kube-system no aportan nada acá
+      // y multiplicarian el volumen.
+      rule {
+        source_labels = ["__meta_kubernetes_namespace"]
+        regex         = "whatsapp-lab"
+        action        = "keep"
+      }
+      rule {
+        source_labels = ["__meta_kubernetes_namespace"]
+        target_label  = "namespace"
+      }
+      rule {
+        source_labels = ["__meta_kubernetes_pod_name"]
+        target_label  = "pod"
+      }
+      rule {
+        source_labels = ["__meta_kubernetes_pod_label_app"]
+        target_label  = "app"
+      }
+      rule {
+        source_labels = ["__meta_kubernetes_pod_container_name"]
+        target_label  = "container"
+      }
+    }
+
+    loki.source.kubernetes "pods" {
+      targets    = discovery.relabel.pods.output
+      forward_to = [loki.process.json.receiver]
+    }
+
+    // Parseo del JSON de pino.
+    //
+    // `level` y `evento` SI se promueven a label: son conjuntos chicos y cerrados
+    // (info/warn/error; una docena de eventos). Eso permite `{level="error"}` sin
+    // escanear todo. Cualquier campo con id NO se promueve.
+    loki.process "json" {
+      forward_to = [loki.write.default.receiver]
+
+      stage.json {
+        expressions = {
+          level  = "level",
+          evento = "evento",
+        }
+      }
+
+      stage.labels {
+        values = {
+          level  = "",
+          evento = "",
+        }
+      }
+    }
+
+    loki.write "default" {
+      endpoint {
+        url = "http://loki:3100/loki/api/v1/push"
+      }
+    }
+
+---
+# DaemonSet: un Alloy por nodo. Los pods de API estan repartidos uno por nodo, asi que
+# un Deployment de una replica tendria que leer logs de nodos remotos por la API — anda,
+# pero concentra todo el trafico en un pod y es justo lo que un agente no deberia hacer.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: alloy
+  namespace: whatsapp-lab
+spec:
+  selector:
+    matchLabels:
+      app: alloy
+  template:
+    metadata:
+      labels:
+        app: alloy
+    spec:
+      serviceAccountName: alloy
+      containers:
+        - name: alloy
+          image: grafana/alloy:v1.18.1
+          imagePullPolicy: IfNotPresent
+          args:
+            - 'run'
+            - '/etc/alloy/config.alloy'
+            - '--server.http.listen-addr=0.0.0.0:12345'
+            - '--storage.path=/var/lib/alloy'
+          ports:
+            - name: http
+              containerPort: 12345
+          env:
+            # Alloy solo lee los pods de SU nodo: sin esto los tres agentes leerian los
+            # mismos logs y cada linea llegaria por triplicado a Loki.
+            - name: HOSTNAME
+              valueFrom:
+                fieldRef: { fieldPath: spec.nodeName }
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { cpu: 500m, memory: 512Mi }
+          volumeMounts:
+            - name: config
+              mountPath: /etc/alloy
+            - name: datos
+              mountPath: /var/lib/alloy
+      volumes:
+        - name: config
+          configMap:
+            name: alloy-config
+        - name: datos
+          emptyDir: {}

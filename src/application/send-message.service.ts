@@ -24,6 +24,7 @@ import {
   messagesBuffered,
   messagesPublished,
 } from '../observability/metrics';
+import { log } from '../observability/logger';
 import {
   createDeliveries,
   snapshotRecipients,
@@ -191,12 +192,35 @@ export class SendMessageService {
     // sin importar en que estado este la operacion original.
     if (operation.fingerprint !== fingerprint) {
       idempotencyOutcomes.inc({ outcome: 'conflict' });
+      // Se loguea el fingerprint, NO el cuerpo: el cuerpo es contenido del usuario y no
+      // tiene por que quedar escrito en un agregador de logs. El hash alcanza para
+      // demostrar que difieren, que es lo unico que se esta afirmando.
+      log().warn(
+        {
+          evento: 'idempotencia.conflicto',
+          outcome: 'conflict',
+          operationId: operation.id,
+          fingerprintGuardado: operation.fingerprint,
+          fingerprintRecibido: fingerprint,
+        },
+        'misma key con otro contenido: no se ejecuta nada',
+      );
       throw new IdempotencyKeyReusedError(command.idempotencyKey);
     }
 
     if (operation.status === 'completed') {
       // I3 — el retry devuelve el resultado ya persistido, sin repetir el efecto.
       idempotencyOutcomes.inc({ outcome: 'replay' });
+      log().info(
+        {
+          evento: 'idempotencia.replay',
+          outcome: 'replay',
+          operationId: operation.id,
+          messageId: (operation.responseBody as SendMessagePayload | null)?.messageId,
+          attempt: operation.attempt,
+        },
+        'retry: se devuelve el resultado ya persistido, sin repetir el efecto',
+      );
       return {
         kind: 'replay',
         result: {
@@ -228,6 +252,16 @@ export class SendMessageService {
     // la misma operacion.
     if (operation.leaseIsAlive) {
       idempotencyOutcomes.inc({ outcome: 'in_progress' });
+      log().info(
+        {
+          evento: 'idempotencia.en_curso',
+          outcome: 'in_progress',
+          operationId: operation.id,
+          attempt: operation.attempt,
+          retryAfterSegundos: this.retryAfterSeconds(),
+        },
+        'otro dueño la esta ejecutando: no se arranca un segundo efecto',
+      );
       throw new IdempotencyInProgressError(command.idempotencyKey, this.retryAfterSeconds());
     }
 
@@ -401,6 +435,16 @@ export class SendMessageService {
 
     idempotencyOutcomes.inc({ outcome: 'owner' });
     messagesBuffered.inc();
+    log().info(
+      {
+        evento: 'mensaje.bufferizado',
+        outcome: 'owner',
+        messageId: payload.messageId,
+        clientSequence: command.clientSequence,
+        motivo: 'llego una secuencia mayor a la esperada; hay un hueco abierto',
+      },
+      'mensaje bufferizado: no se publica antes que sus predecesores',
+    );
     return { status: 202, replayed: false, payload };
   }
 
@@ -526,6 +570,17 @@ export class SendMessageService {
     if (drained > 0) {
       messagesPublished.inc({ origin: 'drained' }, drained);
     }
+    log().info(
+      {
+        evento: 'mensaje.publicado',
+        outcome: 'owner',
+        messageId: payload.messageId,
+        clientSequence: command.clientSequence,
+        // Cuantos bufferizados se destrabaron en cascada detras de este.
+        drenadosEnCascada: drained,
+      },
+      'mensaje publicado',
+    );
     return { status: 201, replayed: false, payload };
   }
 
@@ -613,6 +668,17 @@ export class SendMessageService {
   ): void {
     if (!completed) {
       idempotencyOutcomes.inc({ outcome: 'lease_lost' });
+      // El fencing actuando: este dueño revivio tarde y su UPDATE no matcheo ninguna
+      // fila. El throw dispara el ROLLBACK y todo lo que acaba de crear se descarta.
+      log().warn(
+        {
+          evento: 'idempotencia.lease_perdido',
+          outcome: 'lease_lost',
+          operationId: lease.operationId,
+          attemptPropio: lease.attempt,
+        },
+        'este dueño perdio el lease: se descarta su efecto (fencing)',
+      );
       throw new IdempotencyLeaseLostError(command.idempotencyKey, lease.attempt);
     }
   }

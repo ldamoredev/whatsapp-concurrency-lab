@@ -69,8 +69,13 @@ Cerrado el 9 de agosto de 2026. Quedó afuera y sigue pendiente:
   `lab_idempotency_outcomes_total`, `lab_ack_transitions_total` y compañía existen en el
   registry; falta llamarlas desde los servicios. Se hace junto con el panel, que las
   consume.
-- **No hay logs JSON estructurados** con `requestId`, `operationId`, `messageId` e
-  `instanceId`. Hoy sólo hay un `console.error` en el filtro de errores.
+- ~~**No hay logs JSON estructurados.**~~ ✅ Resuelto el 16 de agosto. pino (que ya venía
+  en el árbol por Fastify, así que **no agregó dependencias**) escribiendo JSON con
+  `service`, `instance`, `requestId`, y según el evento `operationId` / `messageId` /
+  `outcome` / `code`. El `requestId` se respeta si el cliente lo manda en `X-Request-Id`
+  —así una traza que empieza en otro servicio no se corta— y se devuelve en la respuesta.
+  Viaja por `AsyncLocalStorage`, no por firma: la alternativa era agregarle un parámetro
+  a todas las funciones del dominio. Agregados con **Loki + Alloy** (`npm run obs:up`).
 
 ## ~~S6 — el panel~~ ✅ hecho
 
@@ -357,6 +362,28 @@ compararse.
 Al final de la secuencia de fallas de L3: **8599 operaciones, 7395 completadas, 7395
 mensajes — exactamente iguales**, 1151 fallidas, 53 ambiguas, y **cero violaciones**. Con la
 base cortándose, nada se duplicó ni se perdió.
+
+### Logs: qué se puede preguntar y qué NO puede ser label
+
+`{app="api"} | json | requestId="..."` devuelve **el camino completo de un request**: la
+decisión de dominio, su traducción a HTTP y el cierre. Ejemplo real de un conflicto:
+
+```
+21:09:45.368  warn  idempotencia.conflicto   conflict                 misma key con otro contenido: no se ejecuta nada
+21:09:45.368  warn  dominio.rechazo          IDEMPOTENCY_KEY_REUSED   rechazado por el dominio
+21:09:45.368  warn  request.fin                                       request terminado
+```
+
+**La regla que no se puede violar:** ningún identificador de alta cardinalidad puede ser
+label — ni en Prometheus ni en Loki. Un `requestId` como label crea un stream por request y
+destruye el índice igual que una serie por request destruye Prometheus. Los ids van
+**dentro** de la línea JSON y se filtran al leer. Sólo `level` y `evento` se promueven a
+label, porque son conjuntos chicos y cerrados.
+
+Se eligió **Loki** porque no indexa el contenido —sólo unos pocos labels— y comparte
+etiquetas y Grafana con Prometheus, así que se salta de un pico en una métrica a los logs
+de ese pod en ese minuto. Y **Alloy** en vez de Promtail porque Promtail está declarado
+fin de vida.
 
 ### Lo que falta de S8
 
