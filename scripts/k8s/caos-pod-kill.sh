@@ -24,11 +24,15 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 NS=whatsapp-lab
 BASE="${INGRESS_URL:-http://localhost:8081}"
 MODO="${MODO:-gracil}"
-RATE="${RATE:-20}"
-DURATION="${DURATION:-60s}"
-MATAR_A_LOS="${MATAR_A_LOS:-20}"
-CONVERSACIONES="${CONVERSACIONES:-10}"
+# L2 pide matar durante el plateau de L1, o sea con la MEZCLA de operaciones, no con
+# el escenario base de un solo tipo de request. Se deja elegir para poder comparar.
+ESCENARIO="${ESCENARIO:-escenario-l1.js}"
+RATE="${RATE:-100}"
+DURATION="${DURATION:-3m}"
+MATAR_A_LOS="${MATAR_A_LOS:-60}"
+CONVERSACIONES="${CONVERSACIONES:-20}"
 DISPOSITIVOS="${DISPOSITIVOS:-4}"
+CALIENTES="${CALIENTES:-40}"
 SEED_FILE="$ROOT/infra/k6/seed.json"
 LOG="$ROOT/infra/k6/caos-$MODO.log"
 
@@ -53,7 +57,8 @@ echo "== Sembrando ${CONVERSACIONES}×${DISPOSITIVOS}, streams virgenes =="
 abrir_forward
 DATABASE_URL="postgres://lab:lab@localhost:15432/whatsapp_lab" \
   npx tsx "$ROOT/scripts/seed.ts" \
-    --conversations="$CONVERSACIONES" --devices="$DISPOSITIVOS" --fresh --json \
+    --conversations="$CONVERSACIONES" --devices="$DISPOSITIVOS" \
+    --hot-devices="$CALIENTES" --fresh --json \
   | sed -n '/^{/,$p' > "$SEED_FILE"
 cerrar_forward
 
@@ -64,7 +69,7 @@ kubectl -n "$NS" get pods -l app=api -o custom-columns='POD:.metadata.name,NODO:
 echo
 echo "== Carga: $RATE req/s durante $DURATION, matando un pod a los ${MATAR_A_LOS}s (modo: $MODO) =="
 k6 run -e "INGRESS_URL=$BASE" -e "SEED_FILE=$SEED_FILE" -e "RATE=$RATE" -e "DURATION=$DURATION" \
-  "$ROOT/infra/k6/escenario-base.js" > "$LOG" 2>&1 &
+  "$ROOT/infra/k6/$ESCENARIO" > "$LOG" 2>&1 &
 K6_PID=$!
 
 sleep "$MATAR_A_LOS"
@@ -82,7 +87,7 @@ wait $K6_PID || true
 
 echo
 echo "== Resultado de la carga =="
-grep -E "p\(95\)|http_req_failed\.|lab_mensajes_creados|lab_replays|checks_succeeded|iterations\.\.\." "$LOG" | sed 's/^/  /'
+grep -E "p\(95\)|p\(99\)|✓|✗|l1_tasa|dropped_iterations|checks_succeeded|iterations\.\.\." "$LOG" | sed 's/^/  /'
 
 echo
 echo "== Pods despues =="

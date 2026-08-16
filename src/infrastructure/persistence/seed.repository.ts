@@ -31,6 +31,19 @@ export interface SeedOptions {
   conversations: number;
   devices: number;
   prefix: string;
+  /**
+   * Dispositivos de la PRIMERA conversacion, la "caliente". Por defecto, los mismos
+   * que las demas.
+   *
+   * Existe porque L1 pide al menos una conversacion caliente, y el calor no se puede
+   * fabricar mandando mas trafico a la misma: el orden se asigna por
+   * (conversacion, dispositivo), asi que dos generadores sobre el MISMO stream se
+   * pisan el client_sequence y producen conflictos que no tienen nada que ver con la
+   * carga. El calor de verdad es estructural: muchos dispositivos distintos —cada uno
+   * con su propio stream— compitiendo por la UNICA fila de `conversation_sequences`
+   * de esa conversacion, que es donde esta el `SELECT ... FOR UPDATE`.
+   */
+  hotDevices?: number;
 }
 
 export interface SeededConversation {
@@ -76,8 +89,11 @@ export function planFor(options: SeedOptions): SeededConversation[] {
 
   for (let c = 0; c < options.conversations; c += 1) {
     const deviceIds: string[] = [];
+    // La conversacion 0 es la caliente, por convencion estable: asi dos corridas
+    // distintas calientan la MISMA y son comparables.
+    const cuantos = c === 0 ? (options.hotDevices ?? options.devices) : options.devices;
 
-    for (let d = 0; d < options.devices; d += 1) {
+    for (let d = 0; d < cuantos; d += 1) {
       deviceIds.push(deterministicUuid(options.prefix, 'device', String(c), String(d)));
     }
 

@@ -1,0 +1,120 @@
+# Prometheus, como codigo.
+#
+# NO VIVE EN infra/k8s/base/ por la misma razon que Toxiproxy: base es lo que aplica
+# `deploy.sh` en cada despliegue, y Prometheus no es parte del sistema bajo prueba —
+# scrapear agrega trabajo a los mismos pods que se estan midiendo. Se levanta a pedido
+# con `npm run obs:up`.
+---
+# Service HEADLESS para descubrir los tres pods.
+#
+# El Service `api` es ClusterIP: resuelve a UNA ip virtual y balancea, asi que
+# Prometheus scrapearia "algun" pod cada vez y las series se mezclarian. Con
+# clusterIP: None el DNS devuelve las IPs de TODOS los pods, y `dns_sd_configs` las
+# usa como targets separados.
+#
+# Esto evita ademas darle RBAC a Prometheus para listar pods: menos permisos y menos
+# manifests para una diferencia de cero en lo que se puede ver.
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-headless
+  namespace: whatsapp-lab
+spec:
+  clusterIP: None
+  selector:
+    app: api
+  ports:
+    - name: http
+      port: 3000
+      targetPort: 3000
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: whatsapp-lab
+data:
+  prometheus.yml: |
+    global:
+      # 5s y no los 15s por defecto: una corrida de caos dura 40 segundos y con
+      # scrapes cada 15 quedarian tres puntos, que no alcanzan para ver una curva.
+      scrape_interval: 5s
+      evaluation_interval: 5s
+
+    scrape_configs:
+      - job_name: api
+        metrics_path: /metrics
+        # honor_labels: la aplicacion ya trae su propio label `instance` con el NOMBRE
+        # DEL POD (INSTANCE_ID). Sin esto Prometheus lo pisa con "ip:puerto", que es
+        # justo lo que no se quiere: la pregunta es que REPLICA atendio, y una ip que
+        # cambia en cada reinicio no la contesta.
+        honor_labels: true
+        dns_sd_configs:
+          - names: ['api-headless.whatsapp-lab.svc.cluster.local']
+            type: A
+            port: 3000
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+  namespace: whatsapp-lab
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prometheus
+  template:
+    metadata:
+      labels:
+        app: prometheus
+    spec:
+      containers:
+        - name: prometheus
+          image: prom/prometheus:v3.1.0
+          imagePullPolicy: IfNotPresent
+          args:
+            - '--config.file=/etc/prometheus/prometheus.yml'
+            - '--storage.tsdb.path=/prometheus'
+            # Retencion corta: es un laboratorio, no un historico. Los resultados que
+            # importan se copian a evidence/RESULTS.md, no se dejan en un TSDB efimero.
+            - '--storage.tsdb.retention.time=6h'
+          ports:
+            - name: http
+              containerPort: 9090
+          readinessProbe:
+            httpGet: { path: /-/ready, port: http }
+            periodSeconds: 3
+            failureThreshold: 10
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { cpu: '1', memory: 1Gi }
+          volumeMounts:
+            - name: config
+              mountPath: /etc/prometheus
+            - name: datos
+              mountPath: /prometheus
+      volumes:
+        - name: config
+          configMap:
+            name: prometheus-config
+        # emptyDir y no PVC: si se pierde al reiniciar, no se perdio nada que importe.
+        - name: datos
+          emptyDir: {}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  namespace: whatsapp-lab
+spec:
+  type: ClusterIP
+  selector:
+    app: prometheus
+  ports:
+    - name: http
+      port: 9090
+      targetPort: 9090

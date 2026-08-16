@@ -1,0 +1,227 @@
+# Grafana, con datasource y dashboard COMO CODIGO.
+#
+# Nada de esto se configura por la UI: un dashboard armado a mano vive en el navegador
+# de una persona y se pierde al recrear el cluster. Acá el datasource y el tablero se
+# provisionan desde ConfigMaps, asi que `obs:up` en una maquina nueva levanta lo mismo.
+#
+# El tablero contesta, en una pantalla, las cinco preguntas que pide ALCANCE:
+#   1. ¿el cliente puede enviar y ackear dentro del SLO?
+#   2. ¿las invariantes siguen sanas?
+#   3. ¿que replica recibio trafico?
+#   4. ¿que recurso se saturo?
+#   5. ¿el sistema recupero despues del fallo?
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-provisioning
+  namespace: whatsapp-lab
+data:
+  datasource.yml: |
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        access: proxy
+        url: http://prometheus:9090
+        isDefault: true
+  dashboards.yml: |
+    apiVersion: 1
+    providers:
+      - name: lab
+        folder: ''
+        type: file
+        options:
+          path: /var/lib/grafana/dashboards
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard
+  namespace: whatsapp-lab
+data:
+  lab.json: |
+    {
+      "title": "WhatsApp Lab — SLO, invariantes y saturacion",
+      "uid": "whatsapp-lab",
+      "timezone": "browser",
+      "refresh": "5s",
+      "time": { "from": "now-15m", "to": "now" },
+      "panels": [
+        {
+          "title": "1. SLO — p95 y p99 por ruta",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+          "fieldConfig": { "defaults": { "unit": "s" } },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.95, sum by (le, route) (rate(lab_http_request_duration_seconds_bucket[1m])))",
+              "legendFormat": "p95 {{route}}"
+            },
+            {
+              "expr": "histogram_quantile(0.99, sum by (le, route) (rate(lab_http_request_duration_seconds_bucket[1m])))",
+              "legendFormat": "p99 {{route}}"
+            }
+          ]
+        },
+        {
+          "title": "2. Invariantes violadas (tiene que ser CERO)",
+          "type": "stat",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "red", "value": 1 }
+                ]
+              }
+            }
+          },
+          "targets": [
+            {
+              "expr": "sum(lab_invariant_violations_total) or vector(0)",
+              "legendFormat": "violaciones"
+            }
+          ]
+        },
+        {
+          "title": "3. Que replica recibio trafico (req/s por pod)",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+          "targets": [
+            {
+              "expr": "sum by (instance) (rate(lab_http_requests_total[1m]))",
+              "legendFormat": "{{instance}}"
+            }
+          ]
+        },
+        {
+          "title": "4a. Saturacion — pool de Postgres (waiting es el que importa)",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+          "targets": [
+            {
+              "expr": "sum by (state) (lab_pg_pool_connections)",
+              "legendFormat": "{{state}}"
+            }
+          ]
+        },
+        {
+          "title": "4b. Saturacion — event loop lag y requests en vuelo",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+          "targets": [
+            {
+              "expr": "max by (quantile) (lab_event_loop_lag_seconds)",
+              "legendFormat": "event loop {{quantile}}"
+            },
+            {
+              "expr": "sum(lab_http_inflight_requests)",
+              "legendFormat": "en vuelo"
+            }
+          ]
+        },
+        {
+          "title": "5. Recuperacion — replicas listas y resultados de idempotencia",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+          "targets": [
+            {
+              "expr": "sum(lab_ready)",
+              "legendFormat": "replicas listas"
+            },
+            {
+              "expr": "sum by (outcome) (rate(lab_idempotency_outcomes_total[1m]))",
+              "legendFormat": "{{outcome}}"
+            }
+          ]
+        }
+      ]
+    }
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: whatsapp-lab
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: grafana
+  template:
+    metadata:
+      labels:
+        app: grafana
+    spec:
+      containers:
+        - name: grafana
+          image: grafana/grafana:11.5.1
+          imagePullPolicy: IfNotPresent
+          env:
+            # Sin login: es un laboratorio local, y una pantalla de login entre el
+            # operador y el tablero durante un experimento de 40 segundos no protege
+            # nada. En cualquier despliegue real esto no va.
+            - name: GF_AUTH_ANONYMOUS_ENABLED
+              value: 'true'
+            - name: GF_AUTH_ANONYMOUS_ORG_ROLE
+              value: 'Admin'
+            - name: GF_AUTH_DISABLE_LOGIN_FORM
+              value: 'true'
+          ports:
+            - name: http
+              containerPort: 3000
+          readinessProbe:
+            httpGet: { path: /api/health, port: http }
+            periodSeconds: 3
+            failureThreshold: 20
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: '1', memory: 512Mi }
+          volumeMounts:
+            - name: provisioning-datasources
+              mountPath: /etc/grafana/provisioning/datasources
+            - name: provisioning-dashboards
+              mountPath: /etc/grafana/provisioning/dashboards
+            - name: dashboards
+              mountPath: /var/lib/grafana/dashboards
+      volumes:
+        # El mismo ConfigMap montado dos veces con subPath distinto: Grafana busca los
+        # datasources y los proveedores de dashboards en carpetas separadas.
+        - name: provisioning-datasources
+          configMap:
+            name: grafana-provisioning
+            items:
+              - key: datasource.yml
+                path: datasource.yml
+        - name: provisioning-dashboards
+          configMap:
+            name: grafana-provisioning
+            items:
+              - key: dashboards.yml
+                path: dashboards.yml
+        - name: dashboards
+          configMap:
+            name: grafana-dashboard
+            items:
+              - key: lab.json
+                path: lab.json
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: whatsapp-lab
+spec:
+  type: ClusterIP
+  selector:
+    app: grafana
+  ports:
+    - name: http
+      port: 3000
+      targetPort: 3000

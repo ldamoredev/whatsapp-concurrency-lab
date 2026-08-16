@@ -318,18 +318,67 @@ vs. optimista"*. **Ya no hace falta decidir por intuición: con la base lenta, e
 conversación es el cuello y cuesta dos órdenes de magnitud.** El compare-and-set con
 reintento (la columna `version` existe para eso) ahora tiene contra qué medirse.
 
+### ✅ L1, L2, L3, L4 y observabilidad — hechos (16 de agosto de 2026)
+
+Todo en **[evidence/RESULTS.md](../evidence/RESULTS.md)**, con el comando al lado de cada
+número. Lo que hay que saber sin abrirlo:
+
+- **L1** (`npm run k6:l1`) — 100 ops/s × 5 min con la mezcla real: 60% envíos, 20% acks, 15%
+  retries equivalentes, 5% conflictos deliberados, más una **conversación caliente**.
+  Pasó p95 (12.46 ms) y p99 (409 ms) en la segunda corrida; **la primera falló p99 con
+  901 ms y 11 descartadas con configuración idéntica**. No se bajó ningún umbral.
+- **L2** (`npm run caos:pod-kill`) — kill durante el plateau: reemplazo creado, la carga
+  nunca dejó de cruzar ≥2 réplicas, `lab_ready` en 2 por un solo bucket de 15 s, cero
+  violaciones.
+- **L3** (`npm run caos:l3`) — latencia y después cortes de conexión, y retirada del fallo.
+  Los cuatro criterios de L3 pasaron. **Liveness no reinició ningún pod**, que es la prueba
+  de que la probe no toque la base.
+- **L4** (`npm run k6:l4`) — escalera 50/100/200/400 y vuelta. Codo entre 100 y 200 req/s,
+  recuperación sola al bajar.
+- **Observabilidad** (`npm run obs:up`) — Prometheus + Grafana con datasource y tablero como
+  código. Ningún ID ni key como label.
+
+### El número que S8 tenía que producir: el pool de 10 es el primer límite
+
+Estaba anotado como deuda desde el slice 2 —*"el número correcto sale de L1/L3, no de una
+intuición"*— y ahora hay datos. A 100 ops/s, con 14–20 requests en vuelo por pod contra
+**10 conexiones**, hasta 9 esperan turno. El event loop nunca pasó de 65 ms. En L4 la
+progresión de `pool waiting` (0 → 8 → **269**) es la única métrica que se mueve antes que
+la latencia.
+
+**Pero no se probó subirlo.** Podría mover el codo, o simplemente trasladar la contención al
+lock del contador o a Postgres. Ese es el experimento que sigue, y ahora tiene contra qué
+compararse.
+
+### Y el resultado que justifica el laboratorio entero
+
+Al final de la secuencia de fallas de L3: **8599 operaciones, 7395 completadas, 7395
+mensajes — exactamente iguales**, 1151 fallidas, 53 ambiguas, y **cero violaciones**. Con la
+base cortándose, nada se duplicó ni se perdió.
+
 ### Lo que falta de S8
 
-- **`TOXIC=reset_peer`**: implementado en el script, sin correr.
-- **El camino de timeout**: latencia por encima de los 10 s de `statement_timeout`, para ver
-  qué error devuelve el sistema y si la invariante aguanta cuando *sí* falla.
-- **Prometheus + Grafana como código.** Nunca IDs ni keys como labels.
-- Escenarios de k6 más allá del base: carga sostenida larga, y un escenario de **replays**
-  medido aparte a propósito (es una operación distinta, no una corrida contaminada).
+- **Subir el pool y volver a medir**, que es la continuación natural de lo de arriba.
+- **El total de un request no está acotado por nada.** Los timeouts individuales existen
+  (`statement_timeout` 10 s, `connectionTimeout` 5 s) pero **su suma no**: el máximo
+  observado en L3 fue de **22.43 s** sin violar ninguno, porque un request hace varias
+  queries y además espera conexión. Hace falta un presupuesto de tiempo por request.
+- **El costo en latencia de un pod kill** sigue sin poder medirse en esta máquina (ver la
+  sección de L2 en RESULTS: la corrida de control salió peor que la del kill).
+- Un escenario de **replays** medido aparte a propósito: es una operación distinta, no una
+  corrida contaminada.
 - **Duplicación a vigilar**: `LabService.invariantViolations` (el panel, I4/I5/I8/I9) y
   `invariants.repository.ts` (la auditoría, I1–I5/I8/I9) hacen chequeos parecidos en dos
   lugares. No se unificó para no tocar el módulo del panel; si divergen, el panel y la
   auditoría van a contar cosas distintas sobre la misma base.
+
+### Una trampa del arnés que ya costó una corrida
+
+`caos-l3.sh` leía los `restartCount` **después** de que el `trap` restaurara el
+`DATABASE_URL`. Restaurar dispara un rollout, así que estaba leyendo los restarts de pods
+recién nacidos —siempre 0, siempre "verde", sin significar nada—. Ya está arreglado
+capturándolos antes de restaurar, pero el patrón vale para cualquier script de caos: **la
+evidencia se captura durante el experimento, no después de limpiar.**
 
 ## Deudas concretas abiertas
 

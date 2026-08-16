@@ -118,6 +118,25 @@ describe('seed reproducible', () => {
     expect(await countRows('messages')).toBe(1);
   });
 
+  it('la conversacion caliente lleva mas dispositivos, que es como se fabrica el calor', async () => {
+    // El calor de L1 NO se hace mandando mas trafico a la misma conversacion: el orden
+    // se asigna por (conversacion, dispositivo), asi que dos generadores sobre el mismo
+    // stream se pisan el client_sequence. Se hace con MAS dispositivos en una sola
+    // conversacion: cada uno tiene su stream, y todos compiten por la misma fila de
+    // conversation_sequences, que es donde esta el FOR UPDATE.
+    const result = await seedFixtures(testPool(), { ...opciones, hotDevices: 12 });
+
+    expect(result.conversations[0].deviceIds).toHaveLength(12);
+    for (const resto of result.conversations.slice(1)) {
+      expect(resto.deviceIds).toHaveLength(3);
+    }
+    expect(await countRows('devices')).toBe(12 + 3 * 3);
+
+    // Y sigue siendo idempotente con la conversacion caliente puesta.
+    const segunda = await seedFixtures(testPool(), { ...opciones, hotDevices: 12 });
+    expect(segunda.inserted.devices).toBe(0);
+  });
+
   it('genera uuid validos, que es lo unico que la base va a aceptar', async () => {
     const uuid = deterministicUuid('lab', 'conversation', '0');
 

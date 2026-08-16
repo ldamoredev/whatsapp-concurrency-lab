@@ -45,10 +45,14 @@ function readCount(argv: string[], name: string, fallback: number, max: number):
 }
 
 export function optionsFrom(argv: string[]): SeedOptions {
+  const devices = readCount(argv, 'devices', 3, 50);
+
   return {
     conversations: readCount(argv, 'conversations', 5, 10_000),
-    devices: readCount(argv, 'devices', 3, 50),
+    devices,
     prefix: readOption(argv, 'prefix', 'lab'),
+    // La conversacion caliente de L1: mas dispositivos en la primera conversacion.
+    hotDevices: readCount(argv, 'hot-devices', devices, 500),
   };
 }
 

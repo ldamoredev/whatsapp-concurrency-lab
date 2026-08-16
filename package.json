@@ -42,7 +42,12 @@
     "k6:base": "bash scripts/k6/base.sh",
     "verify": "tsx scripts/verify-invariants.ts",
     "caos:pod-kill": "bash scripts/k8s/caos-pod-kill.sh",
-    "caos:toxiproxy": "bash scripts/k8s/caos-toxiproxy.sh"
+    "caos:toxiproxy": "bash scripts/k8s/caos-toxiproxy.sh",
+    "k6:l1": "bash scripts/k6/l1.sh",
+    "obs:up": "bash scripts/k8s/obs.sh up",
+    "obs:down": "bash scripts/k8s/obs.sh down",
+    "caos:l3": "bash scripts/k8s/caos-l3.sh",
+    "k6:l4": "bash scripts/k6/l4.sh"
   },
   "dependencies": {
     "@nestjs/common": "^11.1.6",
