@@ -12,10 +12,12 @@ Quedó afuera del slice y sigue pendiente:
   índice, pero **nada barre las vencidas, y esto sigue abierto**. Ojo con el malentendido
   fácil: los dos CronJobs de S7 barren *huecos* y *batches de entrega*; ninguno toca
   `idempotency_operations`. Falta el script —no existe— antes que el manifest.
-- **Failpoint HTTP real para C2.** Hoy C2 se prueba a nivel de servicio: se ejecuta, se
-  descarta el resultado y se reintenta. Falta la versión que corta el socket **después del
-  commit** y reintenta contra el ingress. Necesita el cluster; un `500` antes del commit no
-  sirve para simular esto.
+- ~~**Failpoint HTTP real para C2.**~~ ✅ Resuelto el 16 de agosto: `npm run k6:c2`, contra el
+  ingress y bajo concurrencia. No hizo falta un failpoint en el código — alcanzó con un
+  cliente impaciente (timeout de 12 ms): el servidor commitea igual y el cliente nunca ve la
+  respuesta. **Y enseñó que una operación ambigua tiene TRES respuestas correctas, no dos**:
+  el 409 "en curso" es tan válido como el 200 y el 201, porque es el mecanismo que impide el
+  duplicado. Ver [RESULTS](../evidence/RESULTS.md).
 - **`IdempotencyLeaseLostError` devuelve 409.** Es defendible (el cliente reintenta y
   encuentra el resultado del owner nuevo) pero quizás `503 + Retry-After` describa mejor
   "esto fue transitorio y no fue tu culpa". Decidir con datos de L1, no por intuición.

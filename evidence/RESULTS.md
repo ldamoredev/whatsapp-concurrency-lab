@@ -227,6 +227,52 @@ generador, es dónde está la cola: 269 conexiones esperando en el pool.
 
 ---
 
+## C2 — La operación ambigua, contra el ingress
+
+```bash
+npm run k6:c2
+```
+
+Estaba anotado como deuda desde el slice 2: *"hoy C2 se prueba a nivel de servicio. Falta la
+versión que corta el socket **después del commit** y reintenta contra el ingress. Necesita el
+cluster."*
+
+**Cómo se fabrica la ambigüedad sin tocar el servidor:** el primer POST sale con un timeout
+de cliente de **12 ms**. El servidor sigue trabajando y muchas veces commitea igual; el
+cliente ya se fue y nunca vio la respuesta. Eso *es* la operación ambigua — el efecto existe
+o no, y el cliente no puede saberlo. No hace falta un failpoint en el código: hace falta un
+cliente impaciente.
+
+### La primera versión de este escenario falló, y el sistema tenía razón
+
+Exigía que el reintento devolviera 200 o 201, y 1394 respuestas cayeron fuera. No era el
+sistema: eran **409**, y son correctos. Con el cliente rindiéndose a los 12 ms, el reintento
+llega mientras el intento original **todavía se está ejecutando**, y ahí la respuesta correcta
+es "está en curso, no arranco otro" — que es exactamente el mecanismo que impide el
+duplicado. Las métricas de negocio lo confirmaron: `in_progress: 2738`, **cero 500**.
+
+**Una operación ambigua tiene tres respuestas correctas, no dos.** La aserción no se aflojó
+para pasar: se corrigió la expectativa y se **endureció** — un 409 es aceptable pero tiene que
+**converger**.
+
+| | |
+|---|---|
+| Operaciones ambiguas provocadas | 2174 |
+| Reintento → 201 (primera ejecución) | 1013 |
+| Reintento → 200 (replay) | 43 |
+| Reintento → 409 "en curso" | 1118 |
+| **De esos 409, convergieron** | **1118 (todos)** |
+| Intentos hasta converger | avg 2.14, máx 4 |
+| **Nunca convergieron** | **0** |
+| Respuestas inesperadas (5xx, red) | **0** |
+| Checks | 3230 / 3230 |
+
+Y la base al final: **4372 operaciones = 4372 completadas = 4372 mensajes**, cero
+`in_progress`, cero violaciones. Con 2174 clientes que nunca supieron si su envío había
+llegado, **no se creó un solo mensaje de más.**
+
+---
+
 ## Observabilidad
 
 ```bash
