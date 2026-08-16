@@ -280,14 +280,56 @@ tráfico (mensajes, entregas, operaciones de idempotencia, `device_sequences`, y
 `next_server_sequence`) **acotado al prefijo**, dejando la población intacta. Una corrida
 repetible necesita streams vírgenes, no solo la población.
 
+### ✅ I11 y Toxiproxy — hechos (16 de agosto de 2026)
+
+Todo en **[evidence/RESULTS.md](../evidence/RESULTS.md)**, con los comandos que producen
+cada número. Resumen:
+
+- **`npm run caos:pod-kill`** (y `MODO=abrupto`). Kill grácil y abrupto durante la carga:
+  mensajes creados según el cliente = mensajes en la base en las tres corridas,
+  `operaciones_falladas` en 0, y **cero violaciones de I1–I10**. **I11 cumplido.**
+- **`npm run caos:toxiproxy`**. 100 ms de latencia inyectada entre API y Postgres →
+  **p95 de 6.64 s**, throughput de 20/s a 6.98/s, y aun así **cero fallos y cero
+  violaciones**.
+- **`npm run verify`** audita I1–I10 contra la base y sale con código 1 si algo se rompió.
+  Tiene tests que le inyectan violaciones reales: un verificador que no puede fallar no
+  verifica nada.
+
+**Dos cosas que no hay que leer de más en esos resultados:**
+
+1. **Cero fallos en el pod kill NO es evidencia de resiliencia.** A 20 req/s hay 0.23
+   requests en vuelo en todo el sistema (Little): matar un pod casi nunca interrumpe
+   ninguno. Y a 300 req/s, donde sí interrumpiría, **la corrida de control sin matar nada
+   salió peor que la corrida con el kill** (p95 41 ms vs 6 ms). La misma configuración da
+   entre 6 y 41 ms según la corrida. **El costo en latencia de un pod kill no se puede
+   medir en esta máquina**; hacen falta n≥5 por condición y menos ruido de fondo.
+2. **El experimento de Toxiproxy midió degradación, no el camino de error.** El máximo fue
+   8.02 s y el `statement_timeout` es de 10 s, así que nunca se disparó.
+
+### Lo que la latencia inyectada dejó en claro sobre el lock
+
+Los 100 ms se convirtieron en 6.64 s: **~50× de amplificación**. Un envío hace del orden de
+diez round-trips a la base, y el `SELECT … FOR UPDATE` sobre `conversation_sequences` se
+sostiene durante todos ellos, con cuatro streams serializados detrás de cada contador.
+
+Esto le pone número a dos deudas que estaban anotadas como intuición: *"el drenado en
+cascada publica de a uno dentro de la transacción que tiene tomado el lock"* y *"medir lock
+vs. optimista"*. **Ya no hace falta decidir por intuición: con la base lenta, el lock por
+conversación es el cuello y cuesta dos órdenes de magnitud.** El compare-and-set con
+reintento (la columna `version` existe para eso) ahora tiene contra qué medirse.
+
 ### Lo que falta de S8
 
-- **Toxiproxy** entre API y Postgres.
-- **Pod kill durante carga (I11)** y `evidence/RESULTS.md`. Ahora sí hay contra qué
-  comparar: la tabla de arriba es el "antes".
+- **`TOXIC=reset_peer`**: implementado en el script, sin correr.
+- **El camino de timeout**: latencia por encima de los 10 s de `statement_timeout`, para ver
+  qué error devuelve el sistema y si la invariante aguanta cuando *sí* falla.
 - **Prometheus + Grafana como código.** Nunca IDs ni keys como labels.
 - Escenarios de k6 más allá del base: carga sostenida larga, y un escenario de **replays**
   medido aparte a propósito (es una operación distinta, no una corrida contaminada).
+- **Duplicación a vigilar**: `LabService.invariantViolations` (el panel, I4/I5/I8/I9) y
+  `invariants.repository.ts` (la auditoría, I1–I5/I8/I9) hacen chequeos parecidos en dos
+  lugares. No se unificó para no tocar el módulo del panel; si divergen, el panel y la
+  auditoría van a contar cosas distintas sobre la misma base.
 
 ## Deudas concretas abiertas
 

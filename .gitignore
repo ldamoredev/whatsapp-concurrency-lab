@@ -10,3 +10,4 @@ coverage/
 .idea/
 .vscode/
 infra/k6/seed.json
+infra/k6/*.log

@@ -10,7 +10,8 @@
     "scripts/migrate.ts",
     "scripts/expire-gaps.ts",
     "scripts/cleanup-deliveries.ts",
-    "scripts/seed.ts"
+    "scripts/seed.ts",
+    "scripts/verify-invariants.ts"
   ],
   "exclude": ["node_modules", "dist", "test", "scripts/demo-*.ts", "**/*.spec.ts"]
 }

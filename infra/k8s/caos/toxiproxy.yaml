@@ -1,0 +1,75 @@
+# Toxiproxy entre la API y PostgreSQL.
+#
+# Es la pieza que ALCANCE dibuja en la arquitectura: los tres pods de API no le hablan
+# a Postgres directo, sino a este proxy, que puede degradar la conexion a pedido —
+# latencia, cortes, timeouts— sin tocar ni la aplicacion ni la base.
+#
+# NO VIVE EN infra/k8s/base/. Todo lo que hay en base lo aplica `deploy.sh` en cada
+# despliegue, y el camino normal del laboratorio tiene que ser el de siempre: API →
+# Postgres. Meter un proxy permanente cambiaria en silencio lo que miden TODAS las
+# demas corridas, incluida la linea de base de k6. Se aplica y se saca desde
+# `scripts/k8s/caos-toxiproxy.sh`.
+#
+# Una sola replica a proposito: dos proxies significarian dos conjuntos de toxics y
+# solo una parte del trafico degradado, que es una condicion imposible de interpretar.
+apiVersion: v1
+kind: Service
+metadata:
+  name: toxiproxy
+  namespace: whatsapp-lab
+spec:
+  type: ClusterIP
+  selector:
+    app: toxiproxy
+  ports:
+    # El puerto de administracion: por acá se crean proxies y se agregan toxics.
+    - name: api
+      port: 8474
+      targetPort: 8474
+    # El proxy en si: la API se conecta acá creyendo que es Postgres.
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: toxiproxy
+  namespace: whatsapp-lab
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: toxiproxy
+  template:
+    metadata:
+      labels:
+        # La NetworkPolicy de base/60 tiene que dejar pasar esta etiqueta hacia
+        # Postgres: es el unico que le va a hablar mientras dure el experimento.
+        app: toxiproxy
+    spec:
+      containers:
+        - name: toxiproxy
+          image: ghcr.io/shopify/toxiproxy:2.10.0
+          # Importada con `k3d image import`, igual que la imagen del lab.
+          imagePullPolicy: IfNotPresent
+          # -host 0.0.0.0 y no el default 127.0.0.1: sin esto el puerto de
+          # administracion solo escucha adentro del contenedor y el Service no llega.
+          args: ['-host=0.0.0.0']
+          ports:
+            - name: api
+              containerPort: 8474
+            - name: postgres
+              containerPort: 5432
+          readinessProbe:
+            httpGet: { path: /version, port: api }
+            periodSeconds: 2
+            failureThreshold: 5
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: '1', memory: 256Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ['ALL']

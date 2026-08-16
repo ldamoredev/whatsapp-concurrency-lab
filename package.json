@@ -39,7 +39,10 @@
     "k8s:smoke:ingress": "bash scripts/k8s/smoke-ingress.sh",
     "seed": "tsx scripts/seed.ts",
     "k8s:seed": "bash scripts/k8s/seed.sh",
-    "k6:base": "bash scripts/k6/base.sh"
+    "k6:base": "bash scripts/k6/base.sh",
+    "verify": "tsx scripts/verify-invariants.ts",
+    "caos:pod-kill": "bash scripts/k8s/caos-pod-kill.sh",
+    "caos:toxiproxy": "bash scripts/k8s/caos-toxiproxy.sh"
   },
   "dependencies": {
     "@nestjs/common": "^11.1.6",

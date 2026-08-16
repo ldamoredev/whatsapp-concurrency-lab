@@ -52,6 +52,13 @@ spec:
         - podSelector:
             matchLabels:
               app: seed
+        # Toxiproxy (`infra/k8s/caos/toxiproxy.yaml`). Cuando esta en el medio, es el
+        # UNICO que le habla a Postgres: la API le habla a el. Tampoco se despliega
+        # con el resto, y el permiso igual se declara acá y no en el manifest de caos,
+        # para que exista un solo lugar donde leer quien puede tocar la base.
+        - podSelector:
+            matchLabels:
+              app: toxiproxy
       ports:
         - protocol: TCP
           port: 5432
