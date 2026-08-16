@@ -9,3 +9,4 @@ coverage/
 # Config de IDE
 .idea/
 .vscode/
+infra/k6/seed.json

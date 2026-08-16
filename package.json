@@ -38,7 +38,8 @@
     "k8s:forward": "kubectl -n whatsapp-lab port-forward svc/api 8080:80",
     "k8s:smoke:ingress": "bash scripts/k8s/smoke-ingress.sh",
     "seed": "tsx scripts/seed.ts",
-    "k8s:seed": "bash scripts/k8s/seed.sh"
+    "k8s:seed": "bash scripts/k8s/seed.sh",
+    "k6:base": "bash scripts/k6/base.sh"
   },
   "dependencies": {
     "@nestjs/common": "^11.1.6",

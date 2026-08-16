@@ -5,6 +5,11 @@
  *   npm run seed -- --conversations=100 --devices=4
  *   npm run seed -- --json                           salida para consumir desde k6
  *   npm run seed -- --prefix=carga2                  otro conjunto, disjunto del anterior
+ *   npm run seed -- --fresh                          ademas, borra el trafico previo
+ *
+ * `--fresh` NO borra la poblacion: borra los mensajes, entregas y operaciones de
+ * idempotencia de esas conversaciones. Es lo que hace repetible una corrida de carga
+ * — sin eso, la segunda corrida recibe replays en vez de crear, y mide otra cosa.
  *
  * Correrlo dos veces seguidas no duplica nada: inserta cero filas la segunda vez y lo
  * dice. La logica y el porque estan en src/infrastructure/persistence/seed.repository.ts.
@@ -14,7 +19,11 @@
  */
 import { databaseOptions } from '../src/infrastructure/database/config';
 import { createPool } from '../src/infrastructure/database/database';
-import { seedFixtures, type SeedOptions } from '../src/infrastructure/persistence/seed.repository';
+import {
+  resetTraffic,
+  seedFixtures,
+  type SeedOptions,
+} from '../src/infrastructure/persistence/seed.repository';
 
 function readOption(argv: string[], name: string, fallback: string): string {
   const flag = `--${name}=`;
@@ -47,10 +56,15 @@ async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const options = optionsFrom(argv);
   const asJson = argv.includes('--json');
+  const fresh = argv.includes('--fresh');
 
   const pool = createPool(databaseOptions({ applicationName: 'whatsapp-lab-seed' }));
 
   try {
+    if (fresh) {
+      await resetTraffic(pool, options);
+    }
+
     const result = await seedFixtures(pool, options);
 
     if (asJson) {

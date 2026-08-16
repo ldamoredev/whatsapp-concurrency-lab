@@ -1,7 +1,9 @@
 import { beforeEach, afterAll, describe, expect, it } from 'vitest';
+import { SendMessageService } from '../../src/application/send-message.service';
 import {
   deterministicUuid,
   planFor,
+  resetTraffic,
   seedFixtures,
 } from '../../src/infrastructure/persistence/seed.repository';
 import { closeTestPool, countRows, testPool, truncateAll } from './helpers/database';
@@ -72,6 +74,48 @@ describe('seed reproducible', () => {
 
     expect(compartidos).toEqual([]);
     expect(await countRows('conversations')).toBe(8);
+  });
+
+  it('--fresh borra el trafico y deja la poblacion, para que dos corridas sean comparables', async () => {
+    // La corrida N+1 tiene que CREAR igual que la N. Sin esto encuentra las mismas
+    // Idempotency-Key ya resueltas, contesta replays y mide una operacion distinta
+    // sin que nada falle: el p95 mejora y la comparacion deja de significar algo.
+    const sembrado = await seedFixtures(testPool(), opciones);
+    const primera = sembrado.conversations[0];
+    const service = new SendMessageService(testPool(), { leaseMs: 30_000, ttlMs: 60_000 });
+
+    const enviar = () =>
+      service.send({
+        idempotencyKey: 'clave-fija-de-la-corrida',
+        conversationId: primera.conversationId,
+        senderId: primera.ownerId,
+        senderDeviceId: primera.deviceIds[0],
+        clientMessageId: 'local-1',
+        clientSequence: 1,
+        body: 'carga',
+      });
+
+    expect((await enviar()).status).toBe(201);
+    expect(await countRows('messages')).toBe(1);
+
+    // Sin limpiar, la misma corrida repetida es un replay: no crea nada.
+    expect((await enviar()).status).toBe(200);
+    expect(await countRows('messages')).toBe(1);
+
+    await resetTraffic(testPool(), opciones);
+
+    // La poblacion sobrevive: son los mismos ids, no hay que resembrar.
+    expect(await countRows('conversations')).toBe(4);
+    expect(await countRows('devices')).toBe(12);
+    expect(await countRows('conversation_devices')).toBe(12);
+    // El trafico no.
+    expect(await countRows('messages')).toBe(0);
+    expect(await countRows('idempotency_operations')).toBe(0);
+    expect(await countRows('device_sequences')).toBe(0);
+
+    // Y ahora vuelve a CREAR, que es la propiedad que se buscaba.
+    expect((await enviar()).status).toBe(201);
+    expect(await countRows('messages')).toBe(1);
   });
 
   it('genera uuid validos, que es lo unico que la base va a aceptar', async () => {

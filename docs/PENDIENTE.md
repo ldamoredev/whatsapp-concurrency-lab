@@ -195,8 +195,16 @@ máquina, porque mezclarlo ya causó un pin mal justificado.
   kubectl 1.24 no puede hablarle. **Subir kubectl allá antes de recrear el cluster.**
 - **`npm ci` en limpio: 148 paquetes, sin sorpresas.** `npm audit` reporta 2 vulnerabilidades
   high; no se tocó (`audit fix` mueve dependencias y eso no era el alcance).
-- **k3d se instala con `brew install k3d`** (acá quedó 5.9.0). **helm y k6 siguen sin
-  instalar**: helm no hace falta hoy, k6 sí para S8.
+- **k3d se instala con `brew install k3d`** (acá quedó 5.9.0) y **k6 con `brew install k6`**
+  (v2.2.0). **helm sigue sin instalar** y hoy no hace falta: Traefik lo instala k3s solo.
+- **`npm run cluster:down` BORRA el cluster, no lo apaga.** Y con los nodos se va su caché
+  de imágenes: al recrearlo, k3s tiene que volver a bajar coredns, local-path-provisioner y
+  Traefik desde Docker Hub. Con la red lenta eso dejó el cluster 40 minutos en
+  `ImagePullBackOff`, con `postgres-0` en `Pending` esperando un PVC que el provisioner
+  todavía no podía crear — un fallo que no tiene nada que ver con el repo y se parece
+  bastante a uno que sí. **Para liberar la máquina y volver, usar `k3d cluster stop
+  whatsapp-lab` / `k3d cluster start`**, que conserva la caché. `cluster:down` solo cuando
+  se quiera empezar de cero de verdad.
 - **Docker Compose 2.5.1 no arranca los contenedores con `up -d --force-recreate`**: los deja
   en `created` y hay que hacer `docker compose start`. En la máquina nueva (Compose 2.29.7)
   esto **no** pasa: `db:up` con `--wait` funcionó de una.
@@ -222,19 +230,64 @@ tocó `src/`: la comparación siempre la hizo PostgreSQL, que es el punto del te
 
 ## S8 — fallos, carga y evidencia
 
-**Lo primero, porque bloquea todo lo demás: el seed reproducible.** Sin datos conocidos no
-hay corrida de k6 repetible, y sin corrida repetible el pod kill bajo carga no prueba nada —
-mide dos poblaciones distintas y la diferencia no se puede atribuir a la falla. Hoy lo único
-que arma estado es `POST /lab/reset` (una conversación, hasta 8 dispositivos, y **trunca
-todas las tablas**), y la demo del README crea la conversación con SQL a mano. Falta un
-script idempotente y parametrizable: N conversaciones × M dispositivos, corrible contra
-Compose y contra el cluster, que se pueda correr dos veces sin duplicar nada. **No empezado.**
+### ✅ El seed reproducible — hecho (15 de agosto de 2026)
 
-- Toxiproxy entre API y Postgres, k6 desde fuera del cluster (**k6 no está instalado**).
-- El escenario base de k6 va contra el **ingress**, no contra los pods, y con modelo abierto.
-  Falta anotar el primer p95.
-- Prometheus + Grafana como código. Nunca IDs ni keys como labels.
-- Pod kill durante carga (I11), `evidence/RESULTS.md`.
+`npm run seed` / `npm run k8s:seed`, lógica en
+`src/infrastructure/persistence/seed.repository.ts`. N conversaciones × M dispositivos,
+parametrizable, corrible contra Compose y contra el cluster.
+
+La idempotencia sale de dos decisiones que no sirven por separado: los ids se derivan del
+prefijo y la posición (UUID v5, sin `randomUUID` ni relojes) y todos los `INSERT` llevan
+`ON CONFLICT DO NOTHING`. **No es `/lab/reset`**, que trunca todo y arma una sola
+conversación; este agrega sin destruir.
+
+Verificado ejecutando: 10×4 → 10/10/40/40 filas; segunda corrida → 0/0/0/0 con la base
+clavada. Contra el cluster, los **mismos uuid** que contra Compose. Y el estado sirve: 3
+requests con la misma `Idempotency-Key` contra una conversación sembrada, por el ingress →
+1 creado, 2 replays, 3 pods, 1 mensaje, 4 envelopes.
+
+### ✅ Escenario base de k6 — hecho, con el primer p95
+
+`npm run k6:base` (`infra/k6/escenario-base.js`). Entra por el **ingress**, modelo
+**abierto** (`constant-arrival-rate`), cada VU dueño de un stream para que dos VUs no se
+pisen el `client_sequence`.
+
+**Primer p95, sistema sano, 20 req/s durante 30 s, k3d de 3 nodos:**
+
+| Corrida | p95 | avg | max | creados | fallos |
+|---|---|---|---|---|---|
+| A | **14.70 ms** | 11.13 ms | 143 ms | 600 | 0 |
+| B | **14.47 ms** | 11.18 ms | 124 ms | 601 | 0 |
+
+Dos corridas separadas difieren en 0.23 ms: la línea de base es repetible. Los umbrales del
+escenario están flojos a propósito (`p95<2000`) — esta corrida existe para **establecer** el
+número, no para aprobarlo. Se aprietan cuando haya varias.
+
+### La trampa de medición que casi arruina todo esto
+
+Vale la pena leerla antes de escribir cualquier escenario nuevo. La `Idempotency-Key` de la
+carga es determinista a propósito, así que **la segunda corrida contra los mismos streams no
+crea nada**: encuentra la respuesta guardada y la repite. No falla, no se queja, y el p95
+mejora muchísimo — porque un replay es un `SELECT` y una creación es una transacción con
+lock del contador de la conversación.
+
+Medido: segunda corrida, **49 replays y 0 creados**, con la base clavada en 600 mensajes y
+los checks en verde. Comparar ese p95 contra el de la primera corrida sería comparar dos
+operaciones distintas creyendo que son la misma.
+
+Por eso existe `npm run seed -- --fresh` y por eso `k6:base` lo usa **siempre**: borra el
+tráfico (mensajes, entregas, operaciones de idempotencia, `device_sequences`, y resetea
+`next_server_sequence`) **acotado al prefijo**, dejando la población intacta. Una corrida
+repetible necesita streams vírgenes, no solo la población.
+
+### Lo que falta de S8
+
+- **Toxiproxy** entre API y Postgres.
+- **Pod kill durante carga (I11)** y `evidence/RESULTS.md`. Ahora sí hay contra qué
+  comparar: la tabla de arriba es el "antes".
+- **Prometheus + Grafana como código.** Nunca IDs ni keys como labels.
+- Escenarios de k6 más allá del base: carga sostenida larga, y un escenario de **replays**
+  medido aparte a propósito (es una operación distinta, no una corrida contaminada).
 
 ## Deudas concretas abiertas
 

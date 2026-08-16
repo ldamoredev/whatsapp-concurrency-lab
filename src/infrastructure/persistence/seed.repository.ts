@@ -92,6 +92,78 @@ export function planFor(options: SeedOptions): SeededConversation[] {
 }
 
 /**
+ * Borra el TRAFICO de estas conversaciones, dejando la poblacion intacta.
+ *
+ * Existe por un hallazgo que casi arruina la medicion de S8 sin dar ningun error.
+ * La `Idempotency-Key` de una corrida de carga es determinista a proposito, asi que
+ * la SEGUNDA corrida contra los mismos streams no crea nada: encuentra la respuesta
+ * guardada y la repite. No falla, no se queja, y el p95 mejora muchisimo — porque un
+ * replay es un SELECT y una creacion es una transaccion con lock del contador de la
+ * conversacion. Medido: segunda corrida, 49 replays y 0 creados, con la base clavada
+ * en 600 mensajes. Comparar ese p95 contra el de la primera corrida seria comparar
+ * dos operaciones distintas creyendo que son la misma.
+ *
+ * Por eso una corrida repetible necesita streams virgenes, no solo la poblacion.
+ *
+ * Es un borrado ACOTADO a las conversaciones del prefijo: no es `TRUNCATE`, no toca
+ * datos de otro prefijo, y no borra conversaciones ni dispositivos —esos son la
+ * poblacion, y volver a crearlos cambiaria los ids—. El orden respeta las claves
+ * foraneas: receipts y envelopes antes que batches, batches antes que messages.
+ */
+export async function resetTraffic(pool: Pool, options: SeedOptions): Promise<void> {
+  const plan = planFor(options);
+  const conversationIds = plan.map((conversation) => conversation.conversationId);
+  const ownerIds = plan.map((conversation) => conversation.ownerId);
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+
+    const scopedMessages = `SELECT id FROM messages WHERE conversation_id = ANY($1::uuid[])`;
+
+    await client.query(
+      `DELETE FROM delivery_receipts WHERE message_id IN (${scopedMessages})`,
+      [conversationIds],
+    );
+    await client.query(
+      `DELETE FROM delivery_envelopes WHERE message_id IN (${scopedMessages})`,
+      [conversationIds],
+    );
+    await client.query(
+      `DELETE FROM delivery_batches WHERE message_id IN (${scopedMessages})`,
+      [conversationIds],
+    );
+    await client.query('DELETE FROM messages WHERE conversation_id = ANY($1::uuid[])', [
+      conversationIds,
+    ]);
+    await client.query('DELETE FROM device_sequences WHERE conversation_id = ANY($1::uuid[])', [
+      conversationIds,
+    ]);
+
+    // Sin esto, la corrida siguiente manda las mismas keys y recibe replays.
+    await client.query('DELETE FROM idempotency_operations WHERE actor_id = ANY($1::uuid[])', [
+      ownerIds,
+    ]);
+
+    // El contador de orden vuelve al principio: si no, cada corrida arranca en un
+    // server_sequence distinto y dos corridas dejan de ser comparables fila a fila.
+    await client.query(
+      `UPDATE conversation_sequences
+          SET next_server_sequence = 1, version = 0
+        WHERE conversation_id = ANY($1::uuid[])`,
+      [conversationIds],
+    );
+
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/**
  * Escribe el plan en la base.
  *
  * Todo en UNA transaccion: un seed a medias es peor que ninguno, porque deja una
