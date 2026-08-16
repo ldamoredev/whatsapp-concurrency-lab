@@ -969,9 +969,435 @@ t3  proceso B  <b>escribe</b> saldo = 90   <u>← se perdió un descuento</u></p
           <p>
             Si te preguntan por los límites: PostgreSQL sigue siendo una sola instancia. Esto
             prueba consistencia de aplicación y routing multi-réplica, <strong>no</strong> alta
-            disponibilidad de la base, tolerancia de zona, capacidad sostenida ni recuperación
-            ante pod-kill o una base degradada. Esos escenarios siguen pendientes.
+            disponibilidad de la base ni tolerancia de zona.
           </p>
+          <p>
+            La carga sostenida, el pod-kill y la base degradada <strong>sí están medidos</strong>
+            — con Toxiproxy entre la API y PostgreSQL, y auditando la base al final de cada
+            corrida. El resultado que resume todo: con la base cortándose, 8599 operaciones,
+            1151 fallaron, 53 quedaron ambiguas, y <strong>las completadas coinciden exactamente
+            con los mensajes escritos</strong>. Cero violaciones. Está en
+            <code>evidence/RESULTS.md</code>, con el comando al lado de cada número.
+          </p>
+          <p>
+            Lo que sigue sin medirse está dicho igual de explícito: el costo en latencia de
+            matar un pod (el ruido de la máquina se lo come) y el total de un request, que no
+            está acotado porque los timeouts individuales se suman.
+          </p>
+        </div>
+      </section>
+
+      <!-- ══ PREGUNTAS DE ENTREVISTA ════════════════════════════════════════ -->
+      <section class="section" id="preguntas">
+        <h2>Las preguntas, y qué contestar</h2>
+
+        <div class="lede">
+          <p class="question">
+            Dieciocho preguntas que caen casi siempre, con la respuesta corta y el número
+            medido que la respalda.
+          </p>
+          <p>
+            Están <strong>plegadas a propósito</strong>: la gracia es taparlas, contestar de
+            memoria en voz alta, y recién después abrir. Una lista abierta se lee; una
+            plegada se practica.
+          </p>
+          <p class="deep">
+            La diferencia entre alguien que estudió el tema y alguien que lo midió está en
+            las cajas verdes. Cualquiera puede decir «uso una constraint»; muy pocos pueden
+            decir «lo probé con 100 clientes concurrentes y quedó un mensaje».
+          </p>
+        </div>
+
+        <div class="qa__group">
+          <h3>Idempotencia</h3>
+
+          <details class="qa__item">
+            <summary>¿Cómo garantizás que un retry no duplique?</summary>
+            <div class="qa__a">
+              <p>
+                La key vive en una tabla con <code>UNIQUE (actor, route, key)</code>.
+                <strong>No hay un SELECT previo</strong> preguntando «¿existe?»: entre ese
+                SELECT y el INSERT hay una ventana donde entra otro pod. La decisión
+                <em>es</em> el INSERT — quien lo gana es el dueño y ejecuta; quien recibe el
+                <code>23505</code> va a leer el resultado del dueño.
+              </p>
+              <span class="qa__evidence">
+                <b>Medido:</b> 12 requests con la misma key por el ingress, repartidos 4/4/4
+                entre tres pods → 1 creado, 11 replays, <b>1 mensaje</b> en la base.
+              </span>
+            </div>
+          </details>
+
+          <details class="qa__item">
+            <summary>¿Y si dos requests con la misma key llegan al mismo instante a pods distintos?</summary>
+            <div class="qa__a">
+              <p>
+                Es el mismo caso: PostgreSQL serializa y uno gana la constraint. Eso es
+                precisamente lo que hace que la solución no dependa de coordinación entre
+                réplicas — no hace falta un lock distribuido ni un líder, porque la base ya
+                es el punto de acuerdo.
+              </p>
+            </div>
+          </details>
+
+          <details class="qa__item">
+            <summary>¿Qué devolvés si la key es la misma pero el body cambió?</summary>
+            <div class="qa__a">
+              <p>
+                <code>409</code>, y <strong>no ejecuta nada</strong>. Se guarda un fingerprint
+                canónico del efecto; si no coincide, es un error del cliente reusando una key.
+                Se chequea antes que el estado de la operación: una key reusada es un error
+                sin importar en qué estado esté la original. Eso es I2.
+              </p>
+              <span class="qa__evidence">
+                <b>En los logs:</b> el evento <code>idempotencia.conflicto</code> guarda los
+                <b>dos fingerprints</b> — nunca el cuerpo, que es contenido del usuario.
+              </span>
+            </div>
+          </details>
+
+          <details class="qa__item">
+            <summary>¿Qué pasa si el dueño muere a mitad de la operación?</summary>
+            <div class="qa__a">
+              <p>
+                Toma un <strong>lease</strong> con vencimiento. Otro proceso puede retomarla
+                cuando vence, y al hacerlo sube el <code>attempt</code>. Ese attempt es el
+                <strong>fencing</strong>: si el dueño viejo revive e intenta cerrar, su UPDATE
+                lleva <code>WHERE attempt = &lt;el suyo&gt;</code> y toca cero filas. El throw
+                dispara el ROLLBACK y todo lo que creó se descarta.
+              </p>
+              <p class="deep">
+                Dos procesos pueden creerse vivos; lo que no pueden es creerse dueños del
+                <em>mismo intento</em>.
+              </p>
+            </div>
+          </details>
+
+          <details class="qa__item">
+            <summary>¿Y quién decide si el lease venció?</summary>
+            <div class="qa__a">
+              <p>
+                <strong>PostgreSQL, siempre.</strong> Ningún reloj de la aplicación decide
+                nada: con tres pods hay tres relojes y darían tres respuestas para la misma
+                operación. El booleano viene calculado en el SELECT, no comparado en Node.
+              </p>
+              <span class="qa__evidence">
+                <b>Ya nos mordió:</b> un bug comparaba <code>lease_until</code> (escrito por
+                Postgres) contra <code>new Date()</code>. Se manifestó como test
+                intermitente. Hay un test de regresión con ese nombre exacto.
+              </span>
+            </div>
+          </details>
+
+          <details class="qa__item">
+            <summary>Una operación ambigua —el cliente nunca vio la respuesta—: ¿qué devolvés al reintentar?</summary>
+            <div class="qa__a">
+              <p>
+                <strong>Hay tres respuestas correctas, no dos:</strong> <code>200</code> si ya
+                había terminado (replay), <code>201</code> si nunca llegó a ejecutarse, y
+                <code>409</code> si el intento original <em>todavía está corriendo</em>. El
+                409 no es un fallo: es el mecanismo que impide el segundo efecto.
+              </p>
+              <p>
+                Lo que sí hay que exigirle al 409 es que <strong>converja</strong>. Un 409
+                eterno sería un cliente sin forma de averiguar si su envío existe, y eso sí
+                sería un defecto.
+              </p>
+              <span class="qa__evidence">
+                <b>Medido:</b> 2174 operaciones ambiguas provocadas con un cliente que se
+                rinde a los 12 ms. 1118 dieron 409 y <b>los 1118 convergieron</b>, en 2.14
+                intentos promedio. Base final: 4372 operaciones = 4372 mensajes.
+              </span>
+            </div>
+          </details>
+        </div>
+
+        <div class="qa__group">
+          <h3>Orden y concurrencia</h3>
+
+          <details class="qa__item">
+            <summary>¿Cómo asignás orden dentro de una conversación con tres réplicas?</summary>
+            <div class="qa__a">
+              <p>
+                Una fila por conversación en <code>conversation_sequences</code>, tomada con
+                <code>SELECT … FOR UPDATE</code> <strong>dentro de la misma transacción</strong>
+                que inserta el mensaje. Es un punto de serialización explícito y elegido.
+              </p>
+              <p>
+                Si el contador se incrementara fuera de esa transacción, un rollback dejaría
+                un número de orden entregado a nadie: un agujero en la secuencia.
+              </p>
+              <span class="qa__evidence">
+                <b>Se audita:</b> el verificador chequea que <code>max(server_sequence)</code>
+                sea igual a la cantidad de mensajes. Un agujero lo delata.
+              </span>
+            </div>
+          </details>
+
+          <details class="qa__item">
+            <summary>¿Lock pesimista u optimista?</summary>
+            <div class="qa__a">
+              <p>
+                Pesimista hoy, y la columna <code>version</code> existe para poder comparar con
+                compare-and-set. <strong>No lo elegí a ojo: lo medí</strong>, y ahora tengo
+                contra qué comparar el optimista.
+              </p>
+              <span class="qa__evidence">
+                <b>Medido:</b> en la conversación caliente el p95 es <b>59 ms contra 33 ms</b>
+                del resto (1.8×). Y con la base lenta, ese lock amplifica <b>100 ms en 6.6
+                segundos</b>.
+              </span>
+            </div>
+          </details>
+
+          <details class="qa__item">
+            <summary>¿Qué hacés con un hueco en la secuencia de un dispositivo?</summary>
+            <div class="qa__a">
+              <p>
+                Buffereo el mensaje y abro un deadline. Si vence, el stream pasa a
+                <code>resync_required</code> y el cliente tiene que declarar desde dónde sigue.
+              </p>
+              <p>
+                <strong>Nunca salto el hueco en silencio</strong>: eso sería publicar un stream
+                con un agujero. Preservo orden y sacrifico disponibilidad de ese dispositivo,
+                a propósito — esperar para siempre tampoco es una solución.
+              </p>
+            </div>
+          </details>
+
+          <details class="qa__item">
+            <summary>¿Por qué una «conversación caliente» y no simplemente más tráfico?</summary>
+            <div class="qa__a">
+              <p>
+                Porque el orden se asigna por <em>(conversación, dispositivo)</em>: dos
+                generadores sobre el mismo stream se pisan el <code>client_sequence</code> y
+                producen conflictos que <strong>no tienen nada que ver con la carga</strong>.
+              </p>
+              <p>
+                El calor real es estructural: una conversación con 40 dispositivos en vez de 4.
+                Cada uno tiene su stream, y aun así los 40 compiten por la <strong>única
+                fila</strong> del contador. Ahí está el <code>FOR UPDATE</code>.
+              </p>
+            </div>
+          </details>
+        </div>
+
+        <div class="qa__group">
+          <h3>Kubernetes</h3>
+
+          <details class="qa__item">
+            <summary>¿Cómo probás que el tráfico se reparte de verdad?</summary>
+            <div class="qa__a">
+              <p>
+                Cada pod devuelve su nombre en <code>X-Instance-Id</code>. Y sobre todo:
+                <strong>no uso <code>kubectl port-forward</code> para medirlo</strong>. No
+                balancea — fija un pod y se queda ahí aunque apuntes al Service.
+              </p>
+              <span class="qa__evidence">
+                <b>Costó tiempo descubrirlo:</b> doce curl por port-forward dieron los doce al
+                mismo pod. Por eso hay dos smoke tests, uno dentro del cluster y otro desde
+                afuera por el ingress.
+              </span>
+            </div>
+          </details>
+
+          <details class="qa__item">
+            <summary>¿Por qué la probe de liveness no consulta la base?</summary>
+            <div class="qa__a">
+              <p>
+                Porque una base lenta es una <strong>dependencia compartida</strong>: reiniciar
+                las tres réplicas no la arregla, y convierte una degradación en una caída
+                total. Liveness pregunta «¿este proceso está vivo?», readiness pregunta
+                «¿puede atender?». Son preguntas distintas.
+              </p>
+              <span class="qa__evidence">
+                <b>Medido en L3:</b> con la base cortándose durante 2 minutos,
+                <code>lab_ready</code> se mantuvo en <b>3</b> y hubo <b>0 restarts</b>.
+              </span>
+            </div>
+          </details>
+
+          <details class="qa__item">
+            <summary>¿El PodDisruptionBudget te protege de que se muera un pod?</summary>
+            <div class="qa__a">
+              <p>
+                <strong>No</strong>, y es el malentendido más común. Sólo intercepta la
+                <strong>API de evicción</strong>: <code>kubectl drain</code>, el autoscaler,
+                upgrades del cluster. Un <code>kubectl delete pod</code> pasa de largo, y un
+                nodo que se apaga también.
+              </p>
+              <p>Cubre interrupciones <em>voluntarias</em>. Para lo otro está el pod kill.</p>
+              <span class="qa__evidence">
+                <b>Probado con la API de evicción:</b> primera <code>201</code>, segunda
+                inmediata <code>429 Cannot evict pod as it would violate the pod's disruption
+                budget</code>.
+              </span>
+            </div>
+          </details>
+
+          <details class="qa__item">
+            <summary>Pusiste una regla de reparto por nodo. ¿Alcanza con eso?</summary>
+            <div class="qa__a">
+              <p>
+                No, y me mordió. El <code>topologySpreadConstraint</code> se evalúa
+                <strong>al planificar</strong>, y durante un rollout los pods viejos todavía
+                cuentan para el skew. Cada colocación individual es legal y el resultado final
+                igual viola la regla.
+              </p>
+              <p>
+                Se arregla con <code>maxSurge: 0</code>: el pod viejo se va antes de que se
+                planifique el nuevo. Y Kubernetes <strong>no reequilibra</strong> nunca — si
+                agregás un nodo, los pods se quedan donde están.
+              </p>
+              <span class="qa__evidence">
+                <b>Pasó de verdad:</b> el primer rollout con la regla puesta dejó
+                <b>0 pods en un nodo y 2 en otro</b>, sin ningún error.
+              </span>
+            </div>
+          </details>
+        </div>
+
+        <div class="qa__group">
+          <h3>Carga, medición y observabilidad</h3>
+
+          <details class="qa__item">
+            <summary>¿Modelo abierto o cerrado para la carga?</summary>
+            <div class="qa__a">
+              <p>
+                <strong>Abierto</strong>, y no es un detalle. Con VUs en bucle cerrado, cuando
+                el sistema se frena el generador manda <em>menos</em> carga —cada VU espera su
+                respuesta—, la cola nunca se forma y la degradación es imposible de ver: el
+                test se autorregula y siempre da bien.
+              </p>
+              <p>
+                En modelo abierto las llegadas son independientes de las respuestas, así que
+                si el sistema se frena la cola crece y se ve.
+              </p>
+            </div>
+          </details>
+
+          <details class="qa__item">
+            <summary>¿Cuál es tu cuello de botella?</summary>
+            <div class="qa__a">
+              <p>
+                <strong>El pool de conexiones, en 10.</strong> No es CPU ni el event loop: es
+                cola por conexión.
+              </p>
+              <span class="qa__evidence">
+                <b>Medido:</b> a 100 ops/s hay <b>14 a 20 requests en vuelo por pod</b> contra
+                10 conexiones, con <b>9 esperando</b>, y el event loop nunca pasa de 65 ms. En
+                la escalera de L4, <code>pool waiting</code> va 0 → 8 → <b>269</b> y es lo
+                único que se mueve antes que la latencia. El codo está entre 100 y 200 req/s.
+              </span>
+              <p class="deep">
+                Lo que todavía no sé: si subir el pool mueve el codo o sólo traslada la
+                contención al lock del contador. Eso es lo siguiente que mediría.
+              </p>
+            </div>
+          </details>
+
+          <details class="qa__item">
+            <summary>¿Cómo sabés que no perdiste ni duplicaste mensajes?</summary>
+            <div class="qa__a">
+              <p>
+                <strong>No cuento respuestas 2xx.</strong> Cada escenario termina consultando
+                la base: <code>npm run verify</code> audita I1–I10 contra los datos y sale con
+                código distinto de cero si algo se rompió.
+              </p>
+              <span class="qa__evidence">
+                <b>El número que muestro:</b> con la base cortándose, 8599 operaciones, 1151
+                fallidas, 53 ambiguas — y <b>operaciones_completadas = mensajes, exacto</b>.
+                Cero violaciones.
+              </span>
+            </div>
+          </details>
+
+          <details class="qa__item">
+            <summary>¿Cómo sabés que tu verificador funciona?</summary>
+            <div class="qa__a">
+              <p>
+                Le inyecto violaciones reales y exijo que las encuentre.
+                <strong>Un verificador que no puede fallar no verifica nada.</strong>
+              </p>
+              <p>
+                Y hay algo lindo: <strong>la violación de I2 no la pude inyectar</strong> — la
+                constraint la rechaza antes con un <code>23505</code>. Eso no es una
+                limitación del test: es exactamente la evidencia que I2 pedía.
+              </p>
+            </div>
+          </details>
+
+          <details class="qa__item">
+            <summary>¿Métricas o logs? ¿Por qué los dos?</summary>
+            <div class="qa__a">
+              <p>Contestan preguntas distintas y ninguna reemplaza a la otra:</p>
+              <p>
+                <strong>Métrica</strong> → «¿cuántas operaciones terminaron en conflict?»
+                (agregado, barato). <strong>Log</strong> → «¿qué le pasó exactamente a
+                <em>este</em> envío?» (individual, caro).
+              </p>
+              <p class="deep">
+                Y no es que falte ganas de meter el <code>messageId</code> en una métrica:
+                <strong>no se puede</strong>. Un id como label de Prometheus es cardinalidad
+                infinita — una serie nueva por mensaje tumba al Prometheus antes que al
+                servicio. La misma regla vale para los labels de Loki. Por eso los
+                identificadores van dentro de la línea JSON y se filtran al leer.
+              </p>
+            </div>
+          </details>
+        </div>
+
+        <div class="qa__group">
+          <h3>Las de juicio, que son las que diferencian</h3>
+
+          <details class="qa__item">
+            <summary>Contame algo que te salió mal.</summary>
+            <div class="qa__a">
+              <p><strong>Tres, y las tres enseñaron algo:</strong></p>
+              <p>
+                <b>1.</b> Puse la regla de reparto por nodo y el primer rollout la violó
+                (0 pods en un nodo, 2 en otro). Se evalúa al planificar y los pods viejos
+                cuentan.
+              </p>
+              <p>
+                <b>2.</b> Mi escenario de operación ambigua <strong>falló y el sistema tenía
+                razón</strong>: exigía 200 o 201 y aparecieron 1394 respuestas 409, que son
+                correctas. Corregí la expectativa y la endurecí en vez de aflojarla.
+              </p>
+              <p>
+                <b>3.</b> Casi reporto una corrida de carga como buena cuando en realidad
+                medía <strong>replays</strong>: la Idempotency-Key es determinista, así que la
+                segunda corrida no crea nada y el p95 <em>mejora</em> porque un replay es un
+                SELECT. Cero errores, todo verde, y no medía nada.
+              </p>
+            </div>
+          </details>
+
+          <details class="qa__item">
+            <summary>¿Qué es lo que NO probaste?</summary>
+            <div class="qa__a">
+              <p>
+                <strong>El costo en latencia de matar un pod.</strong> A 20 req/s hay 0.23
+                requests en vuelo en todo el sistema (Little), así que cero errores era el
+                resultado esperado incluso si el sistema fuera frágil. Y a 300 req/s, la
+                corrida de <em>control sin matar nada</em> salió peor que la del kill.
+              </p>
+              <p>
+                <strong>El total de un request no está acotado.</strong> Vi 22 segundos sin
+                violar ningún timeout individual, porque el de statement y el de conexión
+                <em>se suman</em>. Falta un presupuesto de tiempo por request.
+              </p>
+              <p>
+                <strong>PostgreSQL sigue siendo una sola instancia</strong>, a propósito: esto
+                prueba consistencia de aplicación y recuperación de pods, no alta
+                disponibilidad de la base.
+              </p>
+              <p class="deep">
+                Llegar con una lista de lo que no demostraste es lo que separa a alguien que
+                midió de alguien que ilustró.
+              </p>
+            </div>
+          </details>
         </div>
       </section>
 

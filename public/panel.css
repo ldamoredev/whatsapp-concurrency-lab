@@ -1813,3 +1813,76 @@ button.index__item:disabled {
   padding: 4px 8px;
   cursor: help;
 }
+
+/* ══ Preguntas de entrevista ═══════════════════════════════════════════════
+   Van plegadas a proposito: la gracia es taparlas, intentar responder de
+   memoria, y recien despues abrir. Una lista abierta se lee, no se practica. */
+.qa__group {
+  margin: 22px 0 0;
+}
+.qa__group > h3 {
+  margin: 0 0 10px;
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted, #7c8598);
+}
+.qa__item {
+  border: 1px solid var(--line, #22262f);
+  border-radius: 10px;
+  margin-bottom: 8px;
+  background: var(--panel, #12151b);
+  overflow: hidden;
+}
+.qa__item[open] {
+  border-color: var(--accent, #4a7dff);
+}
+.qa__item > summary {
+  cursor: pointer;
+  padding: 12px 14px;
+  font-weight: 600;
+  line-height: 1.45;
+  list-style: none;
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+}
+.qa__item > summary::-webkit-details-marker {
+  display: none;
+}
+.qa__item > summary::before {
+  content: '▸';
+  color: var(--accent, #4a7dff);
+  flex: 0 0 auto;
+  transition: transform 0.12s ease;
+}
+.qa__item[open] > summary::before {
+  transform: rotate(90deg);
+}
+.qa__item > summary:hover {
+  background: var(--panel-2, #171b23);
+}
+.qa__a {
+  padding: 0 14px 14px 34px;
+  border-top: 1px solid var(--line, #22262f);
+  padding-top: 12px;
+}
+.qa__a p {
+  margin: 0 0 10px;
+}
+.qa__a p:last-child {
+  margin-bottom: 0;
+}
+/* El dato medido que respalda la respuesta. Sin numero, es una opinion. */
+.qa__evidence {
+  display: block;
+  margin-top: 10px;
+  padding: 9px 11px;
+  border-left: 3px solid var(--ok, #35c07f);
+  background: var(--panel-2, #171b23);
+  font-size: 13px;
+  color: var(--fg-2, #b9c1d1);
+}
+.qa__evidence b {
+  color: var(--ok, #35c07f);
+}
